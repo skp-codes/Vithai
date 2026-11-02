@@ -10,6 +10,21 @@ const FUND_SLOTS = ['largecap', 'midsmall', 'debt', 'international', 'gold'];
 const SUB_OPTIONS = { midsmall: ['Mid Cap', 'Small Cap'], debt: ['Corporate Bond', 'Banking and PSU'] };
 const FACT_KEYS = ['expenseRatio', 'aum', 'exitLoad', 'alpha', 'peRatio', 'ytm'];
 
+// Ready-made allocation mixes for the Setup page (percent of the monthly total)
+const PRESETS = {
+  steadier: { label: 'Steadier', note: 'Steadier: 65% equity, 25% debt, 10% gold. Smaller falls; suits a goal within about 5–7 years.',
+    alloc: { largecap: 30, nifty50: 10, midsmall: 15, international: 10, debt: 25, gold: 10 } },
+  balanced: { label: 'Balanced', note: 'Balanced: 70% equity with a large-cap core (large cap fund + Nifty 50 = 40%), 20% debt, 10% gold.',
+    alloc: { largecap: 25, nifty50: 15, midsmall: 20, international: 10, debt: 20, gold: 10 } },
+  growth: { label: 'Growth', note: 'Growth: 80% equity, more mid/small cap and international, 10% debt, 10% gold. Bigger swings; suits 10+ years.',
+    alloc: { largecap: 25, nifty50: 15, midsmall: 25, international: 15, debt: 10, gold: 10 } },
+};
+function presetAlloc(key, usSlot) {
+  const a = { ...PRESETS[key].alloc, usstocks: 0 };
+  if (usSlot) { const half = Math.round(a.international / 2); a.usstocks = a.international - half; a.international = half; }
+  return a;
+}
+
 const ICONS = {
   setup: '<path d="M12 15a3 3 0 100-6 3 3 0 000 6z"/><path d="M19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z"/>',
   funds: '<path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-6"/>',
@@ -125,7 +140,9 @@ function renderSetup(main) {
       <input class="input num" id="total" type="number" min="0" step="500" value="${s.monthlyTotal}"></div></div>
     </div>
     <div class="card">
-      <h3>Allocation</h3><p class="sub">Percentages must add up to 100. The fund shown is the top-ranked one on the Fund dashboard, unless you've pinned a different one there.</p>
+      <h3>Allocation</h3><p class="sub">Pick a ready-made mix or set your own. Percentages must add up to 100. The fund shown is the top-ranked one on the Fund dashboard, unless you've pinned a different one there.</p>
+      <div class="seg" id="presets" style="margin-bottom:6px">${Object.entries(PRESETS).map(([k, p]) => `<button type="button" data-p="${k}">${p.label}</button>`).join('')}<button type="button" data-p="custom">Custom</button></div>
+      <p class="note" id="presetnote" style="margin:0 0 12px"></p>
       <div class="tablewrap"><table class="t"><thead><tr><th>Slot</th><th class="r">%</th><th class="r">Per month</th><th>Fund</th></tr></thead>
       <tbody>${rows}</tbody><tfoot><tr><td>Total</td><td class="r" id="pctsum"></td><td class="r" id="amtsum"></td><td id="sumnote"></td></tr></tfoot></table></div>
     </div>
@@ -164,8 +181,26 @@ function renderSetup(main) {
     document.getElementById('sumnote').innerHTML = sum === 100 ? '<span class="pos">Adds up to 100%</span>' : `<span class="warn">${sum < 100 ? 100 - sum + '% unallocated' : sum - 100 + '% over'}</span>`;
     return sum;
   };
-  main.querySelectorAll('input').forEach((i) => (i.oninput = recalc));
+  const currentAlloc = () => Object.fromEntries([...document.querySelectorAll('.alloc')].map((i) => [i.dataset.slot, Number(i.value) || 0]));
+  const markPreset = () => {
+    const a = currentAlloc();
+    const match = Object.keys(PRESETS).find((k) => { const t = presetAlloc(k, s.usSlot); return Object.keys(a).every((slot) => (t[slot] || 0) === a[slot]); });
+    const key = match || 'custom';
+    document.querySelectorAll('#presets button').forEach((b) => b.classList.toggle('on', b.dataset.p === key));
+    document.getElementById('presetnote').textContent = key === 'custom' ? 'Custom: your own split. Edit the percentages below.' : PRESETS[key].note + (s.usSlot ? ' With the US stocks slot on, the international share is split equally between international funds and US stocks.' : '');
+  };
+  document.querySelectorAll('#presets button').forEach((b) => (b.onclick = () => {
+    if (b.dataset.p !== 'custom') {
+      const t = presetAlloc(b.dataset.p, s.usSlot);
+      document.querySelectorAll('.alloc').forEach((i) => { i.value = t[i.dataset.slot] || 0; });
+      recalc();
+    }
+    markPreset();
+    if (b.dataset.p === 'custom') document.querySelector('.alloc')?.focus();
+  }));
+  main.querySelectorAll('input').forEach((i) => (i.oninput = () => { recalc(); markPreset(); }));
   recalc();
+  markPreset();
   document.getElementById('usslot').onchange = async (e) => {
     try { await saveSettings({ usSlot: e.target.checked, usdInr: Number(document.getElementById('usdinr').value) || null }, e.target.checked ? 'US stocks slot added. Give it a percentage below.' : 'US stocks slot removed'); renderSetup(main); } catch (err) { toast(err.message); }
   };

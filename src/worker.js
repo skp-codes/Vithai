@@ -11,7 +11,7 @@ const SLOTS = ['largecap', 'midsmall', 'debt', 'international', 'gold', 'nifty50
 const MARKETS = ['in', 'us', 'mf']; // Tickertape datasets kept in KV
 export const DEFAULT_SETTINGS = {
   monthlyTotal: 50000,
-  alloc: { largecap: 30, midsmall: 25, debt: 15, international: 20, gold: 10, nifty50: 0 },
+  alloc: { largecap: 25, midsmall: 20, debt: 20, international: 10, gold: 10, nifty50: 15 }, // the 'Balanced' preset
   excludedAmcs: [],
   criteria: {},     // per-slot overrides of the default ranking criteria
   picks: {},        // per-slot pinned scheme code (otherwise the top-ranked fund is used)
