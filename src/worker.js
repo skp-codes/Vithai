@@ -94,6 +94,7 @@ async function route(request, env, url) {
   if (p.startsWith('/api/plans/') && m === 'DELETE') return delPlan(env, me, p.slice(11));
   if (p === '/api/backup' && m === 'GET') return json(await buildBackup(env, me, url.searchParams.get('scope') === 'household' ? 'household' : 'me'));
   if (p === '/api/delete-data' && m === 'POST') return deleteData(request, env, me);
+  if (p === '/api/backup/email' && m === 'POST') return emailBackupNow(request, env, me);
   if (p === '/api/household' && m === 'GET') return getHousehold(env, me);
   if (p.startsWith('/api/household/members/')) return memberAction(request, env, me, p.slice(23), m);
   if (p.startsWith('/api/members/') && p.endsWith('/portfolio') && m === 'GET') return memberPortfolio(env, me, p.slice(13, -10));
@@ -562,7 +563,7 @@ function toBase64(text) {
   return btoa(bin);
 }
 
-async function emailBackup(env, to, backup, label) {
+async function emailBackup(env, to, backup, label, beforeDelete = true) {
   if (!env.RESEND_API_KEY) return { sent: false, reason: 'Email is not set up for this site (see README).' };
   const name = `vithai-backup-${backup.scope}-${backup.exportedAt.slice(0, 10)}.json`;
   const res = await fetch('https://api.resend.com/emails', {
@@ -570,12 +571,23 @@ async function emailBackup(env, to, backup, label) {
     headers: { authorization: `Bearer ${env.RESEND_API_KEY}`, 'content-type': 'application/json' },
     body: JSON.stringify({
       from: env.EMAIL_FROM || 'Vithai <onboarding@resend.dev>', to: [to],
-      subject: `Vithai backup before deleting ${label}`,
-      text: `Attached is a full backup of ${label}, taken ${backup.exportedAt} just before it was deleted.\n\nKeep this file: it is the only copy.`,
+      subject: beforeDelete ? `Vithai backup before deleting ${label}` : `Vithai backup of ${label}`,
+      text: beforeDelete ? `Attached is a full backup of ${label}, taken ${backup.exportedAt} just before it was deleted.\n\nKeep this file: it is the only copy.` : `Attached is a full backup of ${label}, taken ${backup.exportedAt}.`,
       attachments: [{ filename: name, content: toBase64(JSON.stringify(backup, null, 1)) }],
     }),
   });
   return res.ok ? { sent: true } : { sent: false, reason: `Email failed (${res.status}): ${(await res.text()).slice(0, 200)}` };
+}
+
+// Your own backup goes to your email; a household backup can only be requested by an admin and goes to that admin
+async function emailBackupNow(request, env, me) {
+  const b = await body(request);
+  const scope = b.scope === 'household' ? 'household' : 'me';
+  const backup = await buildBackup(env, me, scope);
+  const label = scope === 'household' ? `all data for the household "${me.household_name}"` : `all of ${me.name}'s Vithai data`;
+  const mail = await emailBackup(env, me.email, backup, label, false);
+  if (!mail.sent) throw new HttpError(503, mail.reason);
+  return json({ ok: true, to: me.email });
 }
 
 async function deleteData(request, env, me) {

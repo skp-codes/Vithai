@@ -385,9 +385,24 @@ async function renderPortfolio(main) {
   main.innerHTML = '<div class="boot" style="height:200px">Loading portfolio…</div>';
   const hh = await api('GET', '/api/household');
   const viewable = hh.members.filter((m) => m.status === 'active' && (m.id === S.me.id || m.shareDashboard));
-  if (!portfolioMember || !viewable.some((m) => m.id === portfolioMember)) portfolioMember = S.me.id;
-  let data;
-  try { data = await api('GET', `/api/members/${portfolioMember}/portfolio`); } catch (e) { main.innerHTML = `<div class="card">${esc(e.message)}</div>`; return; }
+  const combined = portfolioMember === 'household' && viewable.length > 1;
+  const hidden = hh.members.filter((m) => m.status === 'active' && !viewable.includes(m));
+  if (!combined && (!portfolioMember || !viewable.some((m) => m.id === portfolioMember))) portfolioMember = S.me.id;
+  let data, people = [];
+  try {
+    if (combined) {
+      people = await Promise.all(viewable.map((m) => api('GET', `/api/members/${m.id}/portfolio`)));
+      // Household targets: each member's allocation weighted by their monthly amount
+      const total = people.reduce((a, p) => a + (p.settings.monthlyTotal || 0), 0);
+      const alloc = {};
+      for (const k of Object.keys(SLOTS)) alloc[k] = total ? Math.round(people.reduce((a, p) => a + (p.settings.monthlyTotal || 0) * (p.settings.alloc[k] || 0), 0) / total * 10) / 10 : 0;
+      data = {
+        member: { name: 'Household' },
+        settings: { monthlyTotal: total, alloc, usSlot: people.some((p) => p.settings.usSlot), usdInr: people.find((p) => p.settings.usdInr)?.settings.usdInr },
+        transactions: people.flatMap((p) => p.transactions.map((t) => ({ ...t, who: p.member.name }))),
+      };
+    } else data = await api('GET', `/api/members/${portfolioMember}/portfolio`);
+  } catch (e) { main.innerHTML = `<div class="card">${esc(e.message)}</div>`; return; }
   const tx = data.transactions, set = data.settings;
   let usPrice = () => null;
   if (tx.some((t) => t.slot === 'usstocks')) { try { usPrice = usPriceLookup(await loadDataset('us')); } catch { /* valued at cost */ } }
@@ -418,8 +433,9 @@ async function renderPortfolio(main) {
   for (const t of tx) months[t.month] = (months[t.month] || 0) + t.amount;
 
   main.innerHTML = `
-    <div class="page-head"><div><h2>Portfolio</h2><p>${portfolioMember === S.me.id ? 'Your' : esc(data.member.name) + "'s"} holdings, valued at the latest NAVs and prices.</p></div><div class="grow"></div>
-      ${viewable.length > 1 ? `<div><label class="f">Showing</label><select class="input" id="pmem">${viewable.map((m) => `<option value="${m.id}" ${m.id === portfolioMember ? 'selected' : ''}>${m.id === S.me.id ? 'Me' : esc(m.name)}</option>`).join('')}</select></div>` : ''}</div>
+    <div class="page-head"><div><h2>Portfolio</h2><p>${combined ? `Household total for ${viewable.map((m) => (m.id === S.me.id ? 'you' : esc(m.name))).join(', ')}` : portfolioMember === S.me.id ? 'Your holdings' : esc(data.member.name) + "'s holdings"}, valued at the latest NAVs and prices.</p></div><div class="grow"></div>
+      ${viewable.length > 1 ? `<div><label class="f">Showing</label><select class="input" id="pmem">${viewable.map((m) => `<option value="${m.id}" ${m.id === portfolioMember ? 'selected' : ''}>${m.id === S.me.id ? 'Me' : esc(m.name)}</option>`).join('')}<option value="household" ${combined ? 'selected' : ''}>Household (everyone shown here)</option></select></div>` : ''}</div>
+    ${combined && hidden.length ? `<p class="note">Not included because they keep their portfolio private: ${hidden.map((m) => esc(m.name)).join(', ')}.</p>` : ''}
     <div class="stats">
       <div class="stat"><div class="k">Invested</div><div class="v">${inr(invested)}</div><div class="d">${tx.length} purchases</div></div>
       <div class="stat"><div class="k">Current value</div><div class="v">${inr(value)}</div></div>
@@ -435,6 +451,9 @@ async function renderPortfolio(main) {
         <tbody>${Object.entries(months).sort((a, b) => b[0].localeCompare(a[0])).map(([m, a]) => `<tr><td>${esc(monthLabel(m))}</td><td class="r">${inr(a)}</td><td class="r">${set.monthlyTotal ? pct(a / set.monthlyTotal * 100, 0) : '–'}</td></tr>`).join('') || '<tr><td colspan="3" class="muted">No purchases yet.</td></tr>'}</tbody></table></div>
       </div>
     </div>
+    ${combined ? `<div class="card"><h3>By member</h3><div class="tablewrap"><table class="t"><thead><tr><th>Member</th><th class="r">Monthly plan</th><th class="r">Invested</th><th class="r">Value</th><th class="r">Gain</th><th class="r">Share of household</th></tr></thead>
+      <tbody>${people.map((p) => { const hs = holdings.map((h) => { const mine = p.transactions.filter((t) => t.assetId === h.id); const u = mine.reduce((a, t) => a + t.units, 0), inv = mine.reduce((a, t) => a + t.amount, 0); return { inv, val: h.priced ? u * h.price : inv }; }); const inv = hs.reduce((a, x) => a + x.inv, 0), val = hs.reduce((a, x) => a + x.val, 0); return `<tr><td>${p.member.id === S.me.id ? 'Me' : esc(p.member.name)}</td><td class="r">${inr(p.settings.monthlyTotal)}</td><td class="r">${inr(inv)}</td><td class="r">${inr(val)}</td><td class="r ${signCls(val - inv)}">${inr(val - inv)}</td><td class="r">${value ? pct(val / value * 100, 1) : '–'}</td></tr>`; }).join('')}</tbody></table></div>
+      <p class="note">Pick a member under "Showing" to see their own allocation and holdings.</p></div>` : ''}
     <div class="card"><h3>Holdings</h3>
       <div class="tablewrap"><table class="t"><thead><tr><th>Slot</th><th>Holding</th><th class="r">Units</th><th class="r">Avg cost</th><th class="r">Invested</th><th class="r">Price now</th><th class="r">Value</th><th class="r">Gain</th><th class="r">Gain %</th></tr></thead>
       <tbody>${holdings.sort((a, b) => b.value - a.value).map((h) => `<tr><td>${SLOTS[h.slot]?.short || h.slot}</td><td class="nm">${esc(h.name)}</td><td class="r">${num(h.units, 4)}</td><td class="r">${num(h.invested / h.units, 2)}</td><td class="r">${inr(h.invested)}</td><td class="r">${h.priced ? num(h.price, 2) : '<span class="warn" title="No current price; valued at cost">–</span>'}</td><td class="r">${inr(h.value)}</td><td class="r ${signCls(h.value - h.invested)}">${inr(h.value - h.invested)}</td><td class="r ${signCls(h.value - h.invested)}">${pct((h.value - h.invested) / h.invested * 100)}</td></tr>`).join('') || '<tr><td colspan="9" class="muted">Record purchases on the Monthly plan page to see them here.</td></tr>'}</tbody>
@@ -635,8 +654,11 @@ async function renderHousehold(main) {
     <div class="card"><h3>Your password</h3><button class="btn" id="chpw">Change password</button></div>
     <div class="card"><h3>Back up your data</h3><p class="sub">Download everything Vithai holds for you: setup, monthly plans and every purchase. The Excel file has your purchases and plans as tables; the backup file (.json) is the complete copy.</p>
       <div class="row"><button class="btn" id="bkme" style="flex:0 0 auto">Download my backup (.json)</button><button class="btn" id="bkxl" style="flex:0 0 auto">Download my purchases and plans (Excel)</button>
-      ${admin ? '<button class="btn" id="bkhh" style="flex:0 0 auto">Download whole household backup (.json)</button>' : ''}</div></div>
-    <div class="card"><h3>Delete data</h3><p class="sub">Deleting can't be undone. A backup is emailed to you first (when email is set up for this site) and downloaded to this device.</p>
+      ${admin ? '<button class="btn" id="bkhh" style="flex:0 0 auto">Download whole household backup (.json)</button>' : ''}</div>
+      <div class="row" style="margin-top:10px"><button class="btn" id="emme" style="flex:0 0 auto">Email my backup to ${esc(S.me.email)}</button>
+      ${admin ? `<button class="btn" id="emhh" style="flex:0 0 auto">Email household backup to ${esc(S.me.email)}</button>` : ''}</div>
+      <p class="note">Your own backup always goes to your email. A household backup can only be requested by a household admin and goes to that admin's email.</p></div>
+    <div class="card"><h3>Delete data</h3><p class="sub">Deleting can't be undone. Before anything is deleted, a backup is downloaded to this device and emailed to you (when email is set up for this site): your own data's backup when you delete your data, the whole household's backup to the admin when an admin deletes household data.</p>
       <div class="row"><button class="btn danger" id="delme" style="flex:0 0 auto">Delete all my data</button>${admin ? '<button class="btn danger" id="delhh" style="flex:0 0 auto">Delete all household data</button>' : ''}</div>
       <p class="note">"All my data" removes your setup, plans and purchases; your sign-in stays. "All household data" does that for every member and also removes the household's Tickertape imports, column choices, fund edits and Nifty 50 prices.</p></div>`;
   document.getElementById('share').onchange = async (e) => {
@@ -647,6 +669,9 @@ async function renderHousehold(main) {
   document.getElementById('chpw').onclick = () => promptPasswordChange(false);
   document.getElementById('bkme').onclick = () => downloadBackup('me').catch((e) => toast(e.message));
   document.getElementById('bkhh')?.addEventListener('click', () => downloadBackup('household').catch((e) => toast(e.message)));
+  const emailBk = async (scope, btn) => { btn.disabled = true; try { const r = await api('POST', '/api/backup/email', { scope }); toast(`Backup emailed to ${r.to}`); } catch (e) { toast(e.message); } btn.disabled = false; };
+  document.getElementById('emme').onclick = (e) => emailBk('me', e.target);
+  document.getElementById('emhh')?.addEventListener('click', (e) => emailBk('household', e.target));
   document.getElementById('bkxl').onclick = () => downloadExcel().catch((e) => toast(e.message));
   document.getElementById('delme').onclick = () => deleteDataModal('me');
   document.getElementById('delhh')?.addEventListener('click', () => deleteDataModal('household'));
@@ -692,7 +717,7 @@ function deleteDataModal(scope) {
   const hh = scope === 'household';
   openModal(`<h3>${hh ? 'Delete all household data' : 'Delete all my data'}</h3>
     <p>${hh ? 'This deletes every member\'s setup, plans and purchases, plus the household\'s imported data, column choices, fund edits and Nifty 50 prices. Members keep their sign-ins.' : 'This deletes your setup, monthly plans and every purchase you have recorded. You stay signed in and in your household.'}</p>
-    <p class="note">Step 1: download a backup to this device. Vithai also emails a copy to <b>${esc(S.me.email || 'you')}</b> if email is set up for this site.</p>
+    <p class="note">Step 1: download a backup${hh ? ' of the whole household' : ' of your data'} to this device. Vithai also emails it to <b>${esc(S.me.email || 'you')}</b>${hh ? ' (the admin deleting it)' : ''} if email is set up for this site.</p>
     <button class="btn" id="dlbk">Download backup</button> <span id="dlok" class="note"></span>
     <p class="note" style="margin-top:14px">Step 2: type <b>DELETE</b> to confirm.</p>
     <input class="input" id="dconf" autocomplete="off" placeholder="DELETE">

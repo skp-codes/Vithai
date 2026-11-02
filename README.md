@@ -9,7 +9,7 @@ Vithai is a household investment planner for Indian mutual funds, gold ETFs and 
 3. **Monthly plan.** Each person has their own plan for each month. Pick a month to see what's due: the funds in each section (several per section if you like), the Nifty 50 shares due that month, and your US basket. A new month starts as a draft copied from last month; add, drop or change any fund or amount just for that month. Record what you actually bought, and edit or delete any purchase later (deleting asks first).
    - **Nifty 50 plan** (like the Excel planner): whole shares on a schedule, e.g. *HDFCBANK 1 every month, ICICIBANK 1 every 2 months, ULTRACEMCO 1 every 24 months*, worked out from your monthly budget and index weights, with first-buy months staggered so each month costs about the same. Every stock's shares, frequency and first month are editable. **Full schedule** shows the next 12 months as a grid and downloads it as Excel. Fractional monthly or weekly buying by index weight is also available.
 4. **Portfolio.** Shows invested amount, current value, gain, XIRR, and actual versus target allocation.
-5. **Household.** Works like MealPilot: one person starts a household and others join with an invite code and admin approval. Each member decides whether others in the household can see their portfolio.
+5. **Household.** Works like MealPilot: one person starts a household and others join with an invite code and admin approval. Each member decides whether others in the household can see their portfolio. On the Portfolio page, "Showing" switches between your own portfolio, any member who shares theirs, and a combined **Household** view (everyone who shares, plus you) with a by-member breakdown. Members who keep theirs private are left out of the household totals.
 6. **Indian stocks and US stocks dashboards.** Built from your Tickertape stock screener exports (about 250 columns for India and 75 for the US). Rank stocks on any metrics with your own weights and directions, limit to the top N by market cap or to chosen sectors, and open any stock to see every field.
 7. **Optional US stocks slot.** Turn it on in Setup, set the rupee–dollar rate, and add stocks to your US basket from the US dashboard. The monthly plan splits the slot across the basket, and the portfolio values the holdings in rupees.
 8. **Data page.** A **Vithai export** bookmark exports *every* column from each Tickertape screener. Tickertape caps each export at 45 columns, so the bookmark makes several files. Drop all the files on the Data page and Vithai joins them back together.
@@ -81,9 +81,9 @@ npx wrangler deploy
 
 ## Backups and deleting data
 
-On the **Household** page anyone can download a full backup of their data (.json) or their purchases, plans and allocation as an Excel file. The household admin can also download a backup of the whole household.
+On the **Household** page anyone can download or email a full backup of their own data (.json), or download their purchases, plans and allocation as an Excel file. Your own backup always goes to your email. Only a household admin can back up the whole household, and that backup goes to the admin's email.
 
-**Delete all my data** / **Delete all household data** need you to download a backup first and type DELETE. If email is set up, Vithai also emails the backup to you before deleting. To set up email (free with [Resend](https://resend.com), 3,000 emails a month):
+**Delete all my data** / **Delete all household data** need you to download a backup first and type DELETE. If email is set up, Vithai also emails the backup before deleting: deleting your own data emails your backup to you; an admin deleting household data gets the whole household's backup. To set up email (free with [Resend](https://resend.com), 3,000 emails a month):
 
 ```powershell
 npx wrangler secret put RESEND_API_KEY          # paste the API key from resend.com
