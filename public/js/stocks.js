@@ -1,7 +1,7 @@
 // Indian and US stock dashboards, built from the Tickertape stock screener exports.
 import { esc, num, toast, openModal } from './util.js';
 import { rankRows } from './ranking.js';
-import { loadDataset, companyKey } from './tickertape.js';
+import { loadDataset, companyKey, keyFieldsFor } from './tickertape.js';
 
 const LABEL = { in: 'Indian stocks', us: 'US stocks' };
 
@@ -10,27 +10,16 @@ export function guessDir(label) {
   return /\b(pe|pb|ps|peg|ev|debt|volatility|beta|premium|pledge|days|away from|price ?\/|payout|cost of goods|drawdown)\b/i.test(label) ? 'asc' : 'desc';
 }
 
-// Default criteria (quality, growth, balance sheet and value). Each entry: [label patterns, weight, dir].
-const DEFAULTS = [
-  [[/^5Y Avg Return on Equity$/i, /^Return on Equity( %)?$/i], 1.5, 'desc'],
-  [[/^ROCE( %)?$/i, /^Return on (Capital|Investment)/i], 1, 'desc'],
-  [[/^5Y Historical Revenue Growth$/i, /Revenue Growth/i], 1, 'desc'],
-  [[/^5Y Historical EPS Growth$/i, /EPS Growth/i, /Earnings Growth/i], 1, 'desc'],
-  [[/^5Y Avg Net Profit Margin$/i, /^Net Profit Margin( %)?$/i], 0.5, 'desc'],
-  [[/^Debt to Equity$/i, /Debt.{0,4}Equity/i], 1, 'asc'],
-  [[/^PE Ratio$/i, /^PE Ratio/i], 0.5, 'asc'],
-  [[/^1Y Return( %)?$/i, /1Y Return/i], 0.5, 'desc'],
-];
-
-function defaultCriteria(numCols) {
-  const out = [];
-  for (const [pats, w, dir] of DEFAULTS) {
-    for (const re of pats) {
-      const c = numCols.find((x) => re.test(x));
-      if (c) { if (!out.some(([l]) => l === c)) out.push([c, w, dir]); break; }
-    }
+// Default criteria come from the "ranking" key fields matched at import (ROE, ROCE, growth, margin,
+// debt, PE, 1Y return). Fields your data doesn't have are listed so you know what's left out.
+function defaultCriteria(ds, numCols) {
+  const out = [], missing = [];
+  for (const f of keyFieldsFor(ds.kind).filter((x) => x.rank)) {
+    const label = ds.keys?.[f.id];
+    if (label && numCols.includes(label)) out.push([label, f.rank[0], f.rank[1]]);
+    else missing.push(f.label);
   }
-  return out;
+  return { criteria: out, missing };
 }
 
 export async function renderStocks(main, mkt, ctx) {
@@ -45,26 +34,30 @@ export async function renderStocks(main, mkt, ctx) {
   }
   const cols = ds.columns.map((c) => c.label);
   const numCols = ds.columns.filter((c) => c.type === 'num').map((c) => c.label);
-  const nameCol = cols[0];
-  const sectorCol = cols.find((c) => /^(sub-?sector|sector|industry)$/i.test(c)) || cols[1];
-  const tickerCol = cols.find((c) => /^(ticker|symbol)$/i.test(c));
-  const mcapCol = numCols.find((c) => /^market cap/i.test(c));
-  const priceCol = numCols.find((c) => /^(close price|ltp|last price|price)( \(.*\))?$/i.test(c));
+  const K = ds.keys || {};
+  const nameCol = K.name || cols[0];
+  const sectorCol = K.sector || null;
+  const tickerCol = K.ticker || null;
+  const mcapCol = K.marketCap && numCols.includes(K.marketCap) ? K.marketCap : null;
+  const priceCol = K.price && numCols.includes(K.price) ? K.price : null;
+  const defaults = defaultCriteria(ds, numCols);
   const niftyKeys = new Set((S.nifty || []).map((n) => companyKey(n.name)));
   const niftySymbols = new Set((S.nifty || []).map((n) => n.symbol));
 
   const saved = S.settings.stockCriteria?.[mkt] || {};
   const cfg = {
-    criteria: (saved.criteria || defaultCriteria(numCols)).filter(([l]) => numCols.includes(l)),
+    criteria: saved.criteria || defaultCriteria(ds, numCols).criteria,
     topN: saved.topN ?? 500,
     sectors: saved.sectors || [],
   };
-  const sectors = [...new Set(ds.objects.map((o) => o[sectorCol]).filter(Boolean))].sort();
+  const sectors = sectorCol ? [...new Set(ds.objects.map((o) => o[sectorCol]).filter(Boolean))].sort() : [];
+  const usable = () => cfg.criteria.filter(([l]) => numCols.includes(l));
+  const unavailable = () => cfg.criteria.filter(([l]) => !numCols.includes(l));
   let search = '', showAll = false, sort = { key: 'rank', dir: 1 }, critFilter = '';
 
   const universe = () => {
     let rows = ds.objects;
-    if (cfg.sectors.length) rows = rows.filter((o) => cfg.sectors.includes(o[sectorCol]));
+    if (sectorCol && cfg.sectors.length) rows = rows.filter((o) => cfg.sectors.includes(o[sectorCol]));
     if (mcapCol && cfg.topN > 0) rows = [...rows].sort((a, b) => (b[mcapCol] ?? -1) - (a[mcapCol] ?? -1)).slice(0, cfg.topN);
     return rows;
   };
@@ -98,10 +91,19 @@ export async function renderStocks(main, mkt, ctx) {
 
   function drawCriteria() {
     const panel = document.getElementById('scrit');
-    const active = new Map(cfg.criteria.map(([l, w, d]) => [l, { w, d }]));
-    const listed = [...cfg.criteria.map(([l]) => l), ...numCols.filter((c) => !active.has(c))]
+    const active = new Map(usable().map(([l, w, d]) => [l, { w, d }]));
+    const uni = universe();
+    const cover = (c) => uni.length ? uni.filter((o) => typeof o[c] === 'number').length / uni.length : 0;
+    const gone = unavailable();
+    const listed = [...usable().map(([l]) => l), ...numCols.filter((c) => !active.has(c))]
       .filter((c) => !critFilter || c.toLowerCase().includes(critFilter.toLowerCase()));
-    panel.innerHTML = `<h3>Ranking criteria</h3><p class="sub">Tick metrics, set weights, and flip ↑/↓ if the direction is wrong for a metric.</p>
+    panel.innerHTML = `<h3>Ranking criteria</h3><p class="sub">Tick metrics, set weights, and flip ↑/↓ if the direction is wrong for a metric. The % shows how many stocks in your universe have that metric.</p>
+      ${gone.length ? `<div class="card" style="background:var(--gold-soft);border-color:transparent;padding:12px 14px"><b>Not in your current data</b><p class="note" style="margin:4px 0 8px">These saved metrics aren't in the latest import (renamed or missing), so they're left out of the score.</p>
+        ${gone.map(([l], i) => `<div class="row" style="align-items:center;margin-bottom:6px"><span style="flex:1 1 100%;font-size:12.5px">${esc(l)}</span>
+          <select class="input" data-swap="${i}" style="padding:3px 6px;font-size:12px"><option value="">Use another column instead…</option>${numCols.map((c) => `<option>${esc(c)}</option>`).join('')}</select>
+          <button class="btn small" data-drop="${i}" style="flex:0 0 auto">Remove</button></div>`).join('')}</div>` : ''}
+      ${defaults.missing.length ? `<p class="note warn">Default metrics not in your data (left out): ${esc(defaults.missing.join(', '))}. Match them on the Data page if the column was renamed.</p>` : ''}
+      ${!mcapCol ? '<p class="note warn">No market cap column mapped, so the universe is all stocks.</p>' : ''}
       <div class="row">${mcapCol ? `<div><label class="f">Universe: top N by market cap</label><input class="input num" id="topn" type="number" min="0" step="50" value="${cfg.topN}"><span class="note">0 = all stocks</span></div>` : ''}</div>
       <div style="margin-top:10px"><label class="f">Sectors (${cfg.sectors.length || 'all'})</label><select class="input" id="secsel"><option value="">Add a sector filter…</option>${sectors.map((s) => `<option>${esc(s)}</option>`).join('')}</select>
         <div style="margin-top:6px">${cfg.sectors.map((s, i) => `<span class="chip">${esc(s)}<button data-sec="${i}">×</button></span>`).join('')}</div></div>
@@ -110,7 +112,7 @@ export async function renderStocks(main, mkt, ctx) {
       <div id="critlist">${listed.map((c) => { const a = active.get(c); const d = a?.d || guessDir(c); return `
         <div class="crit"><input type="checkbox" data-k="${esc(c)}" ${a ? 'checked' : ''}>
           <label title="${esc(c)}">${esc(c)} <button class="btn small ghost" data-dir="${esc(c)}" style="padding:0 5px" title="Flip direction">${d === 'asc' ? '↓ better' : '↑ better'}</button></label>
-          <input class="w" type="number" min="0" step="0.5" data-w="${esc(c)}" value="${a?.w ?? 1}"></div>`; }).join('')}</div>
+          <input class="w" type="number" min="0" step="0.5" data-w="${esc(c)}" value="${a?.w ?? 1}"></div>${a ? `<div class="note" style="margin:-2px 0 4px 26px">${cover(c) === 0 ? '<span class="warn">no data in this universe: not scoring</span>' : `${Math.round(cover(c) * 100)}% of stocks have it`}</div>` : ''}`; }).join('')}</div>
       <div class="row" style="margin-top:14px"><button class="btn primary" id="ssave">Save criteria</button><button class="btn" id="sreset">Reset to default</button></div>`;
     const dirs = new Map(listed.map((c) => [c, active.get(c)?.d || guessDir(c)]));
     const collect = () => {
@@ -119,12 +121,19 @@ export async function renderStocks(main, mkt, ctx) {
         const k = c.dataset.k;
         if (c.checked) criteria.push([k, Number(panel.querySelector(`[data-w="${CSS.escape(k)}"]`).value) || 0, dirs.get(k)]);
       });
-      // keep selected metrics hidden by the metric search
+      // keep selected metrics hidden by the metric search, and saved ones not in this data
       for (const [l, w, d] of cfg.criteria) if (!listed.includes(l)) criteria.push([l, w, d]);
       cfg.criteria = criteria;
       const t = document.getElementById('topn'); if (t) cfg.topN = Number(t.value) || 0;
     };
     panel.querySelectorAll('#critlist input, #topn').forEach((i) => (i.onchange = () => { collect(); drawTable(); }));
+    panel.querySelectorAll('[data-drop]').forEach((b) => (b.onclick = () => { const l = gone[+b.dataset.drop][0]; cfg.criteria = cfg.criteria.filter(([x]) => x !== l); drawCriteria(); drawTable(); }));
+    panel.querySelectorAll('[data-swap]').forEach((sel) => (sel.onchange = () => {
+      if (!sel.value) return;
+      const [l, w] = gone[+sel.dataset.swap];
+      cfg.criteria = cfg.criteria.filter(([x]) => x !== l && x !== sel.value).concat([[sel.value, w, guessDir(sel.value)]]);
+      drawCriteria(); drawTable();
+    }));
     panel.querySelectorAll('[data-dir]').forEach((b) => (b.onclick = () => {
       const k = b.dataset.dir; dirs.set(k, dirs.get(k) === 'asc' ? 'desc' : 'asc');
       b.textContent = dirs.get(k) === 'asc' ? '↓ better' : '↑ better'; collect(); drawTable();
@@ -136,26 +145,26 @@ export async function renderStocks(main, mkt, ctx) {
     document.getElementById('sreset').onclick = async () => {
       const sc = { ...S.settings.stockCriteria }; delete sc[mkt];
       await saveSettings({ stockCriteria: sc }, 'Back to the default criteria');
-      cfg.criteria = defaultCriteria(numCols); cfg.topN = 500; cfg.sectors = []; drawCriteria(); drawTable();
+      cfg.criteria = defaultCriteria(ds, numCols).criteria; cfg.topN = 500; cfg.sectors = []; drawCriteria(); drawTable();
     };
   }
 
   function drawTable() {
-    const ranked = rankRows(universe(), cfg.criteria);
+    const ranked = rankRows(universe(), usable());
     const q = search.toLowerCase();
-    let list = ranked.filter((o) => !q || String(o[nameCol]).toLowerCase().includes(q) || String(o[sectorCol] || '').toLowerCase().includes(q) || (tickerCol && String(o[tickerCol] || '').toLowerCase().includes(q)));
+    let list = ranked.filter((o) => !q || String(o[nameCol]).toLowerCase().includes(q) || (sectorCol && String(o[sectorCol] || '').toLowerCase().includes(q)) || (tickerCol && String(o[tickerCol] || '').toLowerCase().includes(q)));
     if (sort.key !== 'rank') list = [...list].sort((a, b) => ((a[sort.key] ?? -Infinity) > (b[sort.key] ?? -Infinity) ? 1 : -1) * sort.dir);
     else if (sort.dir < 0) list = [...list].reverse();
     document.getElementById('scount').textContent = `${num(ranked.length, 0)} stocks ranked`;
     const shown = showAll ? list : list.slice(0, 200);
-    const extra = [mcapCol, priceCol, ...cfg.criteria.map(([l]) => l)].filter((c, i, a) => c && a.indexOf(c) === i).slice(0, 12);
+    const extra = [mcapCol, priceCol, ...usable().map(([l]) => l)].filter((c, i, a) => c && a.indexOf(c) === i).slice(0, 12);
     const basketKeys = new Set((S.settings.usBasket || []).map((x) => x.key));
     const t = document.getElementById('stable');
     t.innerHTML = `<thead><tr><th class="sortable r" data-k="rank">#</th><th class="sortable" data-k="${esc(nameCol)}">${esc(nameCol)}</th><th class="sortable r" data-k="score">Score</th>
       ${extra.map((c) => `<th class="sortable r" data-k="${esc(c)}" title="${esc(c)}">${esc(c.length > 18 ? c.slice(0, 17) + '…' : c)}${sort.key === c ? (sort.dir > 0 ? ' ▲' : ' ▼') : ''}</th>`).join('')}${mkt === 'us' ? '<th></th>' : ''}</tr></thead>
       <tbody>${shown.map((o) => `<tr class="${o.rank === 1 ? 'top' : ''}" data-key="${esc(o.__key)}">
         <td class="r"><span class="rank">${o.rank}</span></td>
-        <td class="nm">${esc(o[nameCol])}${mkt === 'in' && ((tickerCol && niftySymbols.has(String(o[tickerCol]))) || niftyKeys.has(companyKey(o[nameCol]))) ? ' <span class="badge good">Nifty 50</span>' : ''}${basketKeys.has(o.__key) ? ' <span class="badge good">in basket</span>' : ''}<span class="a">${tickerCol ? esc(o[tickerCol] || '') + ' · ' : ''}${esc(o[sectorCol] || '')}</span></td>
+        <td class="nm">${esc(o[nameCol])}${mkt === 'in' && ((tickerCol && niftySymbols.has(String(o[tickerCol]))) || niftyKeys.has(companyKey(o[nameCol]))) ? ' <span class="badge good">Nifty 50</span>' : ''}${basketKeys.has(o.__key) ? ' <span class="badge good">in basket</span>' : ''}<span class="a">${[tickerCol && o[tickerCol], sectorCol && o[sectorCol]].filter(Boolean).map(esc).join(' · ')}</span></td>
         <td class="r">${o.score === null ? '–' : num(o.score, 1)}<span class="score-bar"><i style="width:${o.score || 0}%"></i></span></td>
         ${extra.map((c) => `<td class="r">${num(o[c], Math.abs(o[c]) >= 1000 ? 0 : 2)}</td>`).join('')}
         ${mkt === 'us' ? `<td>${basketKeys.has(o.__key) ? '' : `<button class="btn small" data-add="${esc(o.__key)}">Add</button>`}</td>` : ''}</tr>`).join('') || '<tr><td colspan="20" class="muted">No stocks match.</td></tr>'}</tbody>`;
@@ -175,9 +184,9 @@ export async function renderStocks(main, mkt, ctx) {
 
   function detail(o) {
     if (!o) return;
-    openModal(`<h3>${esc(o[nameCol])}</h3><p class="note">${esc(o[sectorCol] || '')}${o.score !== undefined ? ` · score ${num(o.score, 1)} · rank ${o.rank}` : ''}</p>
+    openModal(`<h3>${esc(o[nameCol])}</h3><p class="note">${esc((sectorCol && o[sectorCol]) || '')}${o.score !== undefined ? ` · score ${num(o.score, 1)} · rank ${o.rank}` : ''}</p>
       <input class="input" id="dq" placeholder="Filter fields…" style="margin-bottom:10px">
-      <div class="kv" id="dkv">${cols.slice(2).map((c) => `<div data-f="${esc(c.toLowerCase())}">${esc(c)}</div><div data-f="${esc(c.toLowerCase())}">${typeof o[c] === 'number' ? num(o[c], 2) : esc(o[c] ?? '–')}</div>`).join('')}</div>
+      <div class="kv" id="dkv">${cols.filter((c) => c !== nameCol).map((c) => `<div data-f="${esc(c.toLowerCase())}">${esc(c)}</div><div data-f="${esc(c.toLowerCase())}">${typeof o[c] === 'number' ? num(o[c], 2) : esc(o[c] ?? '–')}</div>`).join('')}</div>
       <div class="row" style="margin-top:16px;justify-content:flex-end"><button class="btn" data-close>Close</button></div>`, (root) => {
       root.querySelector('#dq').oninput = (e) => { const q = e.target.value.toLowerCase(); root.querySelectorAll('#dkv [data-f]').forEach((d) => { d.style.display = !q || d.dataset.f.includes(q) ? '' : 'none'; }); };
     });
@@ -192,7 +201,7 @@ export async function renderStocks(main, mkt, ctx) {
 // Latest US price for a basket key (used by the plan and portfolio)
 export function usPriceLookup(ds) {
   if (!ds) return () => null;
-  const priceCol = ds.columns.find((c) => c.type === 'num' && /^(close price|ltp|last price|price)( \(.*\))?$/i.test(c.label))?.label;
+  const priceCol = ds.keys?.price || null;
   const map = new Map(ds.objects.map((o) => [o.__key, priceCol ? o[priceCol] : null]));
   return (key) => map.get(key) ?? null;
 }

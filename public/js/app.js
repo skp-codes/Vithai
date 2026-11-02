@@ -2,7 +2,7 @@
 import { api, esc, inr, num, pct, signCls, today, thisMonth, monthLabel, toast, openModal, xirr, waitForXLSX } from './util.js'; // eslint-disable-line no-unused-vars
 import { METRICS, SLOTS, DEFAULT_CRITERIA, rankFunds } from './ranking.js';
 import { renderStocks, usPriceLookup } from './stocks.js';
-import { KINDS, readExport, mergeParts, toDataset, uploadDataset, loadDataset, clearDatasetCache, mfFactsRows, niftyPricesFrom, saveMfFacts } from './tickertape.js';
+import { KINDS, readExport, mergeParts, toDataset, uploadDataset, loadDataset, clearDatasetCache, mfFactsRows, niftyPricesFrom, saveMfFacts, autoMap, keyFieldsFor, defaultLabel, getColumnMap, saveColumnMap } from './tickertape.js';
 
 const S = { me: null, settings: null, funds: [], meta: {}, nifty: [], route: 'setup', fundsTab: 'largecap', loaded: false };
 const app = document.getElementById('app');
@@ -222,14 +222,19 @@ function renderFunds(main) {
     const groups = {};
     for (const [k, m] of Object.entries(METRICS)) (groups[m.group] ||= []).push(k);
     const subs = SUB_OPTIONS[slot];
-    panel.innerHTML = `<h3>Ranking criteria</h3><p class="sub">Tick the metrics to score on and set their weight. Each fund's score is the weighted average of its percentile on each metric.</p>
+    const pool = eligibleFunds(slot, cfg);
+    const cover = (k) => pool.length ? pool.filter((f) => typeof f[k] === 'number').length / pool.length : 0;
+    const coverNote = (k) => `<div class="note" style="margin:-2px 0 4px 26px">${cover(k) === 0 ? '<span class="warn">no data for these funds: not scoring</span>' : `${Math.round(cover(k) * 100)}% of funds have it`}</div>`;
+    const noData = [...active.keys()].filter((k) => METRICS[k] && cover(k) === 0);
+    panel.innerHTML = `<h3>Ranking criteria</h3><p class="sub">Tick the metrics to score on and set their weight. Each fund's score is the weighted average of its percentile on each metric; funds missing a metric are scored on the rest.</p>
       <div class="row"><div><label class="f">Minimum age (years)</label><input class="input num" id="minage" type="number" min="0" step="1" value="${cfg.minAge}"></div></div>
       ${subs ? `<div class="crit-group">Include</div>${subs.map((s) => `<label class="toggle" style="margin-right:14px"><input type="checkbox" class="subchk" value="${s}" ${cfg.sub.includes(s) ? 'checked' : ''}>${s}</label>`).join('')}` : ''}
       <div style="margin-top:10px"><label class="toggle"><input type="checkbox" id="hideclosed" ${cfg.hideClosed ? 'checked' : ''}>Hide funds marked closed to new SIPs</label></div>
       ${Object.entries(groups).map(([g, keys]) => `<div class="crit-group">${g}</div>${keys.map((k) => `
         <div class="crit"><input type="checkbox" data-k="${k}" ${active.has(k) ? 'checked' : ''} id="c_${k}">
         <label for="c_${k}">${METRICS[k].label}<span class="dir">${METRICS[k].dir === 'asc' ? '↓ better' : '↑ better'}</span></label>
-        <input class="w" type="number" min="0" step="0.5" data-w="${k}" value="${active.get(k) ?? 1}" aria-label="Weight for ${METRICS[k].label}"></div>`).join('')}`).join('')}
+        <input class="w" type="number" min="0" step="0.5" data-w="${k}" value="${active.get(k) ?? 1}" aria-label="Weight for ${METRICS[k].label}"></div>${active.has(k) ? coverNote(k) : ''}`).join('')}`).join('')}
+      ${noData.length ? `<p class="note warn" style="margin-top:10px">${noData.length} ticked metric${noData.length > 1 ? 's have' : ' has'} no data for these funds (${noData.map((k) => METRICS[k].label).join(', ')}) and ${noData.length > 1 ? 'are' : 'is'} not scoring. <button class="btn small" id="dropempty">Untick them</button></p>` : ''}
       <div class="row" style="margin-top:14px"><button class="btn primary" id="savecrit">Save criteria</button><button class="btn" id="resetcrit">Reset to Vithai default</button></div>`;
     const collect = () => {
       const criteria = [];
@@ -237,7 +242,8 @@ function renderFunds(main) {
       const sub = subs ? [...panel.querySelectorAll('.subchk:checked')].map((c) => c.value) : [];
       return { minAge: Number(document.getElementById('minage').value) || 0, sub, criteria, hideClosed: document.getElementById('hideclosed').checked };
     };
-    panel.querySelectorAll('input').forEach((i) => (i.onchange = () => { Object.assign(cfg, collect()); drawTable(true); }));
+    panel.querySelectorAll('input').forEach((i) => (i.onchange = () => { Object.assign(cfg, collect()); drawCriteria(); drawTable(true); }));
+    document.getElementById('dropempty')?.addEventListener('click', () => { cfg.criteria = cfg.criteria.filter(([k]) => !noData.includes(k)); drawCriteria(); drawTable(true); });
     document.getElementById('savecrit').onclick = async () => { await saveSettings({ criteria: { ...S.settings.criteria, [slot]: collect() } }, 'Criteria saved'); renderFunds(main); };
     document.getElementById('resetcrit').onclick = async () => { const c = { ...S.settings.criteria }; delete c[slot]; await saveSettings({ criteria: c }, 'Back to the Vithai default'); renderFunds(main); };
   }
@@ -568,14 +574,15 @@ async function renderData(main) {
   const when = (m) => (m?.uploadedAt ? new Date(m.uploadedAt).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' }) : null);
   const status = (k) => {
     const m = ds[k];
-    return `<tr><td><b>${KINDS[k]}</b></td><td>${m ? esc(when(m)) : '<span class="warn">Not loaded</span>'}</td><td class="r">${m ? num(m.rows, 0) : '–'}</td><td class="r">${m ? num(m.cols, 0) : '–'}</td><td class="nm">${m ? esc(m.files || '') : ''}</td></tr>`;
+    const miss = m?.missing ? m.missing.split(',').filter(Boolean).map((id) => keyFieldsFor(k).find((f) => f.id === id)?.label || id) : [];
+    return `<tr><td><b>${KINDS[k]}</b></td><td>${m ? esc(when(m)) + (m.by ? ` <span class="muted">by ${esc(m.by)}</span>` : '') : '<span class="warn">Not loaded</span>'}</td><td class="r">${m ? num(m.rows, 0) : '–'}</td><td class="r">${m ? num(m.cols, 0) : '–'}</td><td class="nm">${m ? esc(m.files || '') : ''}${miss.length ? `<span class="a warn">Missing key fields: ${esc(miss.join(', '))}</span>` : ''}</td></tr>`;
   };
   main.innerHTML = `
     <div class="page-head"><div><h2>Data</h2><p>Load your Tickertape screener exports for mutual funds, Indian stocks and US stocks.</p></div></div>
     <div class="card"><h3>What's loaded</h3>${dsError ? `<p class="err">${esc(dsError)}</p>` : ''}
       <div class="tablewrap"><table class="t"><thead><tr><th>Dataset</th><th>Loaded</th><th class="r">Rows</th><th class="r">Columns</th><th>Files</th></tr></thead>
       <tbody>${['mf', 'in', 'us'].map(status).join('')}</tbody></table></div>
-      <p class="note">Fund NAVs, returns and risk ratios refresh automatically twice a day. Tickertape data only changes when you load new exports.</p></div>
+      <p class="note">This is your household's own data: other households can't see it, and everyone in your household sees the latest import. Fund NAVs, returns and risk ratios refresh automatically twice a day; Tickertape data only changes when you load new exports.</p></div>
     <div class="card"><h3>1 · Export from Tickertape</h3>
       <p class="sub">Tickertape exports at most 45 columns at a time, so the <b>Vithai export</b> button splits every available column into parts and exports each one using Tickertape's own Export button, in your signed-in browser.</p>
       <ol style="padding-left:18px;margin:0 0 12px">
@@ -597,14 +604,16 @@ async function renderData(main) {
   } catch { /* leave as # */ }
 
   let files = [];
+  let plans = {}; // kind -> { group, merged, mapping, saved }
   const drawPreview = () => {
     const box = document.getElementById('ttprev');
     if (!files.length) { box.innerHTML = ''; return; }
     box.innerHTML = `<div class="tablewrap"><table class="t"><thead><tr><th>File</th><th>Type</th><th class="r">Rows</th><th class="r">Columns</th></tr></thead>
       <tbody>${files.map((f, i) => `<tr><td class="nm">${esc(f.name)}</td><td><select class="input" data-i="${i}" style="width:auto;padding:4px 8px">${Object.entries(KINDS).map(([k, l]) => `<option value="${k}" ${f.guess === k ? 'selected' : ''}>${l}</option>`).join('')}</select></td><td class="r">${num(f.rows.length, 0)}</td><td class="r">${f.header.length}</td></tr>`).join('')}</tbody></table></div>
-      <div class="row" style="margin-top:12px"><button class="btn primary" id="ttload" style="flex:0 0 auto">Load into Vithai</button><span class="note" id="ttmsg"></span></div>`;
-    box.querySelectorAll('select[data-i]').forEach((sel) => (sel.onchange = () => { files[+sel.dataset.i].guess = sel.value; }));
-    document.getElementById('ttload').onclick = loadAll;
+      <div class="row" style="margin-top:12px"><button class="btn primary" id="ttnext" style="flex:0 0 auto">Next: check columns</button></div>
+      <div id="ttmap"></div>`;
+    box.querySelectorAll('select[data-i]').forEach((sel) => (sel.onchange = () => { files[+sel.dataset.i].guess = sel.value; document.getElementById('ttmap').innerHTML = ''; }));
+    document.getElementById('ttnext').onclick = buildMapping;
   };
   document.getElementById('ttfiles')?.addEventListener('change', async (e) => {
     const msg = document.getElementById('ttprev');
@@ -612,30 +621,109 @@ async function renderData(main) {
     try { files = await Promise.all([...e.target.files].map(readExport)); drawPreview(); } catch (err) { msg.innerHTML = `<p class="err">${esc(err.message)}</p>`; }
   });
 
+  // Step 2: match key fields, rename or exclude columns, per export type
+  async function buildMapping() {
+    const box = document.getElementById('ttmap');
+    box.innerHTML = '<p class="note">Checking columns…</p>';
+    plans = {};
+    for (const kind of ['mf', 'in', 'us']) {
+      const group = files.filter((f) => f.guess === kind);
+      if (!group.length) continue;
+      const merged = mergeParts(group);
+      let saved = {};
+      try { saved = await getColumnMap(kind); } catch { /* first import */ }
+      plans[kind] = { group, merged, mapping: autoMap(kind, merged.columns, saved || {}) };
+    }
+    box.innerHTML = Object.entries(plans).map(([kind, pl]) => mappingSection(kind, pl)).join('') +
+      `<div class="row" style="margin-top:14px"><button class="btn primary" id="ttload" style="flex:0 0 auto">Load into Vithai</button><span class="note" id="ttmsg"></span></div>`;
+    for (const kind of Object.keys(plans)) wireSection(kind);
+    document.getElementById('ttload').onclick = loadAll;
+  }
+
+  function mappingSection(kind, pl) {
+    const { merged, mapping } = pl;
+    const fields = keyFieldsFor(kind);
+    const sample = (c) => { const r = merged.rows.find((x) => x[c] !== null && x[c] !== '' && x[c] !== '-'); return r ? String(r[c]).slice(0, 40) : ''; };
+    const opts = (sel) => `<option value="">— not in my file —</option>${merged.columns.map((c) => `<option value="${esc(c)}" ${c === sel ? 'selected' : ''}>${esc(mapping.renames[c] || c)}${mapping.renames[c] && mapping.renames[c] !== c ? ` (${esc(c)})` : ''}</option>`).join('')}`;
+    return `<div class="card" style="margin-top:16px" data-kind="${kind}"><h3>${KINDS[kind]}: ${num(merged.rows.length, 0)} rows · ${merged.columns.length} columns</h3>
+      ${mapping.notes.length ? `<p class="warn" style="font-size:13px">Changed since last import: ${mapping.notes.map(esc).join(' ')}</p>` : ''}
+      <p class="sub">Key fields Vithai uses. Each is matched to a column automatically; change the match if a column was renamed, or choose "not in my file". Missing fields are simply skipped.</p>
+      <div class="tablewrap"><table class="t"><thead><tr><th>Field</th><th>Used for</th><th>Column in your file</th><th>Status</th></tr></thead>
+      <tbody>${fields.map((f) => `<tr><td><b>${esc(f.label)}</b>${f.required ? ' <span class="badge">required</span>' : ''}</td><td class="muted" style="white-space:normal">${esc(f.use)}</td>
+        <td><select class="input keysel" data-id="${f.id}" style="width:auto;max-width:320px;padding:4px 8px">${opts(mapping.keys[f.id])}</select></td>
+        <td class="st" data-id="${f.id}"></td></tr>`).join('')}</tbody></table></div>
+      <p class="note missing-note" style="margin-top:8px"></p>
+      <details style="margin-top:10px"><summary style="cursor:pointer;font-weight:600">All ${merged.columns.length} columns: rename or leave out</summary>
+        <input class="input colq" placeholder="Find a column…" style="margin:10px 0;max-width:320px">
+        <div class="tablewrap" style="max-height:50vh"><table class="t"><thead><tr><th>Include</th><th>Column in file</th><th>Name in Vithai</th><th>Example</th></tr></thead>
+        <tbody>${merged.columns.map((c) => `<tr data-col="${esc(c.toLowerCase())}"><td><input type="checkbox" class="inc" data-c="${esc(c)}" ${mapping.excluded.includes(c) ? '' : 'checked'}></td>
+          <td class="nm">${esc(c)}</td><td><input class="input ren" data-c="${esc(c)}" value="${esc(mapping.renames[c] || c)}" style="padding:4px 8px;min-width:220px"></td><td class="muted">${esc(sample(c))}</td></tr>`).join('')}</tbody></table></div>
+      </details></div>`;
+  }
+
+  function wireSection(kind) {
+    const card = document.querySelector(`[data-kind="${kind}"]`);
+    const pl = plans[kind];
+    const fields = keyFieldsFor(kind);
+    const refresh = () => {
+      const missing = [];
+      for (const f of fields) {
+        const sel = card.querySelector(`.keysel[data-id="${f.id}"]`).value;
+        const excluded = sel && !card.querySelector(`.inc[data-c="${CSS.escape(sel)}"]`).checked;
+        const cell = card.querySelector(`.st[data-id="${f.id}"]`);
+        if (sel && !excluded) cell.innerHTML = '<span class="badge good">found</span>';
+        else { cell.innerHTML = f.required ? '<span class="badge bad">needed</span>' : '<span class="badge gold">missing</span>'; missing.push(f); }
+      }
+      const ranking = missing.filter((f) => f.rank);
+      card.querySelector('.missing-note').innerHTML = missing.length
+        ? `<span class="warn">${missing.length} key field${missing.length > 1 ? 's' : ''} missing: ${missing.map((f) => esc(f.label)).join(', ')}.</span> ${ranking.length ? 'They will be left out of the default ranking; you can choose other metrics on the dashboard.' : 'Vithai will work without them.'}`
+        : '<span class="pos">All key fields found.</span>';
+    };
+    card.querySelectorAll('.keysel, .inc').forEach((x) => (x.onchange = refresh));
+    card.querySelectorAll('.ren').forEach((x) => (x.oninput = () => {
+      const c = x.dataset.c;
+      card.querySelectorAll(`.keysel option[value="${CSS.escape(c)}"]`).forEach((o) => { o.textContent = x.value + (x.value !== c ? ` (${c})` : ''); });
+    }));
+    card.querySelector('.colq').oninput = (e) => { const q = e.target.value.toLowerCase(); card.querySelectorAll('tr[data-col]').forEach((tr) => { tr.style.display = !q || tr.dataset.col.includes(q) ? '' : 'none'; }); };
+    refresh();
+    pl.read = () => {
+      const keys = {}, renames = {}, excluded = [];
+      card.querySelectorAll('.keysel').forEach((x) => { keys[x.dataset.id] = x.value || null; });
+      card.querySelectorAll('.ren').forEach((x) => { if (x.value.trim() && x.value.trim() !== x.dataset.c) renames[x.dataset.c] = x.value.trim(); });
+      card.querySelectorAll('.inc').forEach((x) => { if (!x.checked) excluded.push(x.dataset.c); });
+      for (const [id, c] of Object.entries(keys)) if (c && excluded.includes(c)) keys[id] = null;
+      return { keys, renames, excluded };
+    };
+  }
+
   async function loadAll() {
     const btn = document.getElementById('ttload'), msg = document.getElementById('ttmsg');
     btn.disabled = true;
     const done = [];
     try {
-      for (const kind of ['mf', 'in', 'us']) {
-        const group = files.filter((f) => f.guess === kind);
-        if (!group.length) continue;
+      for (const [kind, pl] of Object.entries(plans)) {
+        const mapping = pl.read();
+        if (!mapping.keys.name) throw new Error(`${KINDS[kind]}: choose which column holds the name.`);
+        mapping.renames = Object.fromEntries(pl.merged.columns.map((c) => [c, mapping.renames[c] || defaultLabel(kind, c)]));
         msg.textContent = `Merging and uploading ${KINDS[kind]}…`;
-        const merged = mergeParts(group);
-        const dataset = toDataset(kind, merged, group.map((f) => f.name));
+        // re-merge on the chosen identity columns in case they aren't the first two
+        const merged = mergeParts(pl.group, [mapping.keys.name, mapping.keys.ticker || mapping.keys.subCategory]);
+        const dataset = toDataset(kind, merged, pl.group.map((f) => f.name), mapping);
         await uploadDataset(dataset);
+        await saveColumnMap(kind, { keys: mapping.keys, renames: Object.fromEntries(Object.entries(mapping.renames).filter(([c, l]) => l !== defaultLabel(kind, c))), excluded: mapping.excluded });
         clearDatasetCache(kind);
+        const missing = keyFieldsFor(kind).filter((f) => !mapping.keys[f.id]).map((f) => f.label);
         let extra = '';
         if (kind === 'mf') {
-          const r = await saveMfFacts(mfFactsRows(merged));
+          const r = await saveMfFacts(mfFactsRows(merged, mapping));
           extra = `, ${r.matched} matched to Vithai's funds`;
         }
         if (kind === 'in') {
-          const prices = niftyPricesFrom(merged, S.nifty);
+          const prices = niftyPricesFrom(merged, S.nifty, mapping);
           if (prices.length) { const r = await api('PUT', '/api/nifty', { rows: prices }); S.nifty = r.stocks; }
-          extra = `, Nifty 50 prices updated for ${prices.length} of ${S.nifty.length} stocks`;
+          extra = mapping.keys.price ? `, Nifty 50 prices updated for ${prices.length} of ${S.nifty.length} stocks` : ', no price column so Nifty 50 prices were not updated';
         }
-        done.push(`${KINDS[kind]}: ${num(merged.rows.length, 0)} rows × ${merged.columns.length} columns${extra}`);
+        done.push(`${KINDS[kind]}: ${num(merged.rows.length, 0)} rows × ${dataset.columns.length} columns${extra}.${missing.length ? ` Missing: ${missing.join(', ')}.` : ''}`);
       }
       const f = await api('GET', '/api/funds');
       S.funds = f.funds.map(flattenFacts); S.meta = f.meta || {};

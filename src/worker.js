@@ -74,13 +74,15 @@ async function route(request, env, url) {
   if (p === '/api/me/sharing' && m === 'PUT') return setSharing(request, env, me);
   if (p === '/api/settings' && m === 'GET') return json({ settings: await getSettings(env, me.id) });
   if (p === '/api/settings' && m === 'PUT') return putSettings(request, env, me);
-  if (p === '/api/funds' && m === 'GET') return getFunds(env);
+  if (p === '/api/funds' && m === 'GET') return getFunds(env, me);
   if (p.startsWith('/api/facts/') && m === 'PUT') return putFacts(request, env, me, decodeURIComponent(p.slice(11)));
   if (p === '/api/tickertape' && m === 'POST') return uploadTickertape(request, env, me);
-  if (p === '/api/datasets' && m === 'GET') return listDatasets(env);
-  if (p.startsWith('/api/datasets/') && m === 'GET') return getDataset(env, p.slice(14));
+  if (p.startsWith('/api/colmaps/') && m === 'GET') return getColmap(env, me, p.slice(13));
+  if (p.startsWith('/api/colmaps/') && m === 'PUT') return putColmap(request, env, me, p.slice(13));
+  if (p === '/api/datasets' && m === 'GET') return listDatasets(env, me);
+  if (p.startsWith('/api/datasets/') && m === 'GET') return getDataset(env, me, p.slice(14));
   if (p.startsWith('/api/datasets/') && m === 'PUT') return putDataset(request, env, me, p.slice(14));
-  if (p === '/api/nifty' && m === 'GET') return getNifty(env);
+  if (p === '/api/nifty' && m === 'GET') return getNifty(env, me);
   if (p === '/api/nifty' && m === 'PUT') return putNifty(request, env, me);
   if (p === '/api/transactions' && m === 'GET') return json({ transactions: await listTx(env, me.id, url.searchParams.get('month')) });
   if (p === '/api/transactions' && m === 'POST') return addTx(request, env, me);
@@ -264,18 +266,22 @@ async function putSettings(request, env, me) {
 }
 
 // ---------------------------------------------------------------- funds & facts
-async function getFunds(env) {
+async function getFunds(env, me) {
+  const hid = me.household_id;
   const [schemes, facts, meta] = await env.DB.batch([
     env.DB.prepare('SELECT code, name, amc, category, slot, nav, nav_date, metrics FROM schemes'),
     env.DB.prepare('SELECT code, source, data, updated_at FROM fund_facts'),
-    env.DB.prepare("SELECT key, value FROM meta WHERE key IN ('lastRefresh', 'tickertapeUploadedAt', 'tickertape')"),
+    env.DB.prepare('SELECT key, value FROM meta WHERE key IN (?, ?, ?)').bind('lastRefresh', `tickertapeUploadedAt:${hid}`, `tickertape:${hid}`),
   ]);
-  const metaMap = Object.fromEntries(meta.results.map((r) => [r.key, r.value]));
-  const tt = metaMap.tickertape ? JSON.parse(metaMap.tickertape) : {};
-  delete metaMap.tickertape;
+  const raw = Object.fromEntries(meta.results.map((r) => [r.key, r.value]));
+  const metaMap = { lastRefresh: raw.lastRefresh, tickertapeUploadedAt: raw[`tickertapeUploadedAt:${hid}`] };
+  const tt = raw[`tickertape:${hid}`] ? JSON.parse(raw[`tickertape:${hid}`]) : {};
   // Priority: tickertape (monthly upload; fills gaps) < seed (researched Direct-plan figures) < manual (typed in the app)
   const layers = { seed: new Map(), manual: new Map() };
-  for (const f of facts.results) layers[f.source]?.set(f.code, JSON.parse(f.data));
+  for (const f of facts.results) {
+    if (f.source === 'seed') layers.seed.set(f.code, JSON.parse(f.data));
+    else if (f.source === `manual:${hid}`) layers.manual.set(f.code, JSON.parse(f.data)); // only my household's edits
+  }
   const merge = (code, ttFacts) => {
     const out = { sources: {} };
     for (const [src, d] of [['tickertape', ttFacts], ['seed', layers.seed.get(code)], ['manual', layers.manual.get(code)]]) {
@@ -312,8 +318,8 @@ async function putFacts(request, env, me, code) {
   }
   d.asOf = d.asOf || new Date().toISOString().slice(0, 10);
   await env.DB.prepare(
-    "INSERT INTO fund_facts (code, source, data, updated_at) VALUES (?, 'manual', ?, datetime('now')) ON CONFLICT(code, source) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at",
-  ).bind(code, JSON.stringify(d)).run();
+    "INSERT INTO fund_facts (code, source, data, updated_at) VALUES (?, ?, ?, datetime('now')) ON CONFLICT(code, source) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at",
+  ).bind(code, `manual:${me.household_id}`, JSON.stringify(d)).run();
   return json({ ok: true });
 }
 
@@ -333,8 +339,8 @@ async function uploadTickertape(request, env, me) {
   if (blob.length > 1800000) throw new HttpError(413, 'The upload is too large. Export only Growth plans, or fewer columns.');
   const now = new Date().toISOString();
   await env.DB.batch([
-    env.DB.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('tickertape', ?)").bind(blob),
-    env.DB.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('tickertapeUploadedAt', ?)").bind(now),
+    env.DB.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)').bind(`tickertape:${me.household_id}`, blob),
+    env.DB.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)').bind(`tickertapeUploadedAt:${me.household_id}`, now),
   ]);
   const { results } = await env.DB.prepare('SELECT name FROM schemes').all();
   const matched = results.filter((s) => map[nameKey(cleanName(s.name))]).length;
@@ -382,18 +388,19 @@ function needKV(env) {
   if (!env.DATA) throw new HttpError(501, 'Data storage is not set up yet. Create the KV namespace (see the README) and redeploy.');
 }
 
-async function listDatasets(env) {
+async function listDatasets(env, me) {
   needKV(env);
-  const { keys } = await env.DATA.list({ prefix: 'dataset:' });
+  const prefix = `hh:${me.household_id}:dataset:`;
+  const { keys } = await env.DATA.list({ prefix });
   const out = Object.fromEntries(MARKETS.map((m) => [m, null]));
-  for (const k of keys) out[k.name.slice(8)] = k.metadata || {};
+  for (const k of keys) out[k.name.slice(prefix.length)] = k.metadata || {};
   return json({ datasets: out });
 }
 
-async function getDataset(env, mkt) {
+async function getDataset(env, me, mkt) {
   needKV(env);
   if (!MARKETS.includes(mkt)) throw new HttpError(404, 'Unknown dataset.');
-  const { value, metadata } = await env.DATA.getWithMetadata(`dataset:${mkt}`, { type: 'stream' });
+  const { value, metadata } = await env.DATA.getWithMetadata(`hh:${me.household_id}:dataset:${mkt}`, { type: 'stream' });
   if (!value) throw new HttpError(404, 'No data loaded yet. Load your Tickertape exports on the Data page.');
   return new Response(value, { headers: { 'content-type': 'application/octet-stream', 'cache-control': 'no-store', 'x-dataset-meta': encodeURIComponent(JSON.stringify(metadata || {})) } });
 }
@@ -406,41 +413,72 @@ async function putDataset(request, env, me, mkt) {
   if (size > 24 * 1024 * 1024) throw new HttpError(413, 'Dataset too large (max 24 MB compressed).');
   const metadata = {
     rows: num(request.headers.get('x-rows')), cols: num(request.headers.get('x-cols')),
-    files: str(decodeURIComponent(request.headers.get('x-files') || ''), 500), uploadedAt: new Date().toISOString(), by: me.name, bytes: size,
+    files: str(decodeURIComponent(request.headers.get('x-files') || ''), 500), missing: str(decodeURIComponent(request.headers.get('x-missing') || ''), 500), uploadedAt: new Date().toISOString(), by: me.name, bytes: size,
   };
-  await env.DATA.put(`dataset:${mkt}`, request.body, { metadata });
+  await env.DATA.put(`hh:${me.household_id}:dataset:${mkt}`, request.body, { metadata });
   return json({ ok: true, metadata });
 }
 
+// Column mapping chosen at import (key fields, renames, excluded columns), reused next time
+async function getColmap(env, me, kind) {
+  if (!MARKETS.includes(kind)) throw new HttpError(404, 'Unknown dataset.');
+  const row = await env.DB.prepare('SELECT value FROM meta WHERE key = ?').bind(`colmap:${me.household_id}:${kind}`).first();
+  return json({ map: row ? JSON.parse(row.value) : null });
+}
+async function putColmap(request, env, me, kind) {
+  if (me.role !== 'admin') throw new HttpError(403, 'Only household admins can change the column mapping.');
+  if (!MARKETS.includes(kind)) throw new HttpError(404, 'Unknown dataset.');
+  const b = await body(request);
+  const clean = {
+    keys: Object.fromEntries(Object.entries(b.keys || {}).map(([k, v]) => [str(k, 40), v ? str(v, 300) : null])),
+    renames: Object.fromEntries(Object.entries(b.renames || {}).slice(0, 1000).map(([k, v]) => [str(k, 300), str(v, 120)])),
+    excluded: (Array.isArray(b.excluded) ? b.excluded : []).slice(0, 1000).map((x) => str(x, 300)),
+    savedAt: new Date().toISOString(),
+  };
+  const v = JSON.stringify(clean);
+  if (v.length > 400000) throw new HttpError(413, 'Mapping too large.');
+  await env.DB.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)').bind(`colmap:${me.household_id}:${kind}`, v).run();
+  return json({ ok: true });
+}
+
 // ---------------------------------------------------------------- Nifty 50
-async function getNifty(env) {
-  const { results } = await env.DB.prepare('SELECT symbol, name, weight, ltp, updated_at FROM nifty50 ORDER BY weight DESC').all();
+// Each household keeps its own Nifty 50 list (weights and prices), seeded from the defaults
+async function getNifty(env, me) {
+  const hid = me.household_id;
+  const q = () => env.DB.prepare('SELECT symbol, name, weight, ltp, updated_at FROM household_nifty50 WHERE household_id = ? ORDER BY weight DESC').bind(hid).all();
+  let { results } = await q();
+  if (!results.length) {
+    await env.DB.prepare('INSERT OR IGNORE INTO household_nifty50 (household_id, symbol, name, weight, ltp) SELECT ?, symbol, name, weight, ltp FROM nifty50').bind(hid).run();
+    ({ results } = await q());
+  }
   return json({ stocks: results });
 }
 
 async function putNifty(request, env, me) {
   if (me.role !== 'admin') throw new HttpError(403, 'Only household admins can update Nifty 50 data.');
+  const hid = me.household_id;
   const b = await body(request);
   if (!Array.isArray(b.rows) || !b.rows.length) throw new HttpError(400, 'No rows.');
-  const rows = b.rows.slice(0, 100).map((r) => ({ symbol: str(r.symbol, 30).toUpperCase(), weight: num(r.weight), ltp: num(r.ltp) })).filter((r) => r.symbol);
+  const rows = b.rows.slice(0, 100).map((r) => ({ symbol: str(r.symbol, 30).toUpperCase(), weight: num(r.weight), ltp: num(r.ltp), name: str(r.name, 120) || null })).filter((r) => r.symbol);
   const stmts = [];
   if (b.replaceWeights) {
     if (rows.some((r) => r.weight === null)) throw new HttpError(400, 'Every row needs a weight when replacing the constituents.');
-    stmts.push(env.DB.prepare('DELETE FROM nifty50'));
+    stmts.push(env.DB.prepare('DELETE FROM household_nifty50 WHERE household_id = ?').bind(hid));
   }
   const payload = JSON.stringify(rows);
-  // New symbols (need a weight), then weight and price updates where supplied
+  // New symbols (need a weight), then weight, price and name updates where supplied
   stmts.push(env.DB.prepare(
-    `INSERT OR IGNORE INTO nifty50 (symbol, weight, ltp)
-     SELECT json_extract(value, '$.symbol'), json_extract(value, '$.weight'), json_extract(value, '$.ltp')
-     FROM json_each(?) WHERE json_extract(value, '$.weight') IS NOT NULL`).bind(payload));
+    `INSERT OR IGNORE INTO household_nifty50 (household_id, symbol, name, weight, ltp)
+     SELECT ?1, json_extract(value, '$.symbol'), json_extract(value, '$.name'), json_extract(value, '$.weight'), json_extract(value, '$.ltp')
+     FROM json_each(?2) WHERE json_extract(value, '$.weight') IS NOT NULL`).bind(hid, payload));
   stmts.push(env.DB.prepare(
-    `UPDATE nifty50 SET updated_at = datetime('now'),
-       weight = COALESCE((SELECT json_extract(value, '$.weight') FROM json_each(?1) WHERE json_extract(value, '$.symbol') = nifty50.symbol), weight),
-       ltp = COALESCE((SELECT json_extract(value, '$.ltp') FROM json_each(?1) WHERE json_extract(value, '$.symbol') = nifty50.symbol), ltp)
-     WHERE symbol IN (SELECT json_extract(value, '$.symbol') FROM json_each(?1))`).bind(payload));
+    `UPDATE household_nifty50 SET updated_at = datetime('now'),
+       weight = COALESCE((SELECT json_extract(value, '$.weight') FROM json_each(?2) WHERE json_extract(value, '$.symbol') = household_nifty50.symbol), weight),
+       ltp = COALESCE((SELECT json_extract(value, '$.ltp') FROM json_each(?2) WHERE json_extract(value, '$.symbol') = household_nifty50.symbol), ltp),
+       name = COALESCE((SELECT json_extract(value, '$.name') FROM json_each(?2) WHERE json_extract(value, '$.symbol') = household_nifty50.symbol), name)
+     WHERE household_id = ?1 AND symbol IN (SELECT json_extract(value, '$.symbol') FROM json_each(?2))`).bind(hid, payload));
   await env.DB.batch(stmts);
-  return getNifty(env);
+  return getNifty(env, me);
 }
 
 // ---------------------------------------------------------------- transactions

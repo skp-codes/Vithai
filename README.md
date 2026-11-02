@@ -78,6 +78,19 @@ npx wrangler d1 migrations apply vithai --remote   # only if migrations/ changed
 npx wrangler deploy
 ```
 
+## Importing Tickertape data: column mapping
+
+The import adapts to whatever columns your files have:
+
+- **Key fields.** For each export type, Vithai lists the fields it relies on: name, ticker, sector, market cap, price, the default ranking metrics, and for funds the expense ratio, AUM, exit load and so on. It shows which column each was matched to and whether it was found, is missing, or is required. You can pick a different column (for example after Tickertape renames one) or choose "not in my file".
+- **Rename or leave out any column.** Under "All columns", give a column a different name in Vithai or untick it to drop it.
+- **Remembered per household.** Your choices are saved and reused on the next import. If a column you used last time has disappeared or been matched differently, the import tells you.
+- **Missing data never breaks ranking.** A missing metric is skipped, and funds or stocks are scored on the rest. The dashboards show what share of rows have each ticked metric and warn when one has no data. If a saved metric isn't in the latest import, you can remove it or point it at another column.
+
+## Household data
+
+Everything you import or edit belongs to your household: the Tickertape datasets, column mapping, fund-fact edits and Nifty 50 weights and prices. Every member sees the latest import, and other households never see it. The fund universe and NAV-based metrics from AMFI are public data and shared by all.
+
 ## Tickertape export bookmark
 
 `public/tools/tickertape-export.js` runs in your own signed-in Chrome on a Tickertape screener page. It reads the full filter list, splits it into parts of at most 45 columns (Tickertape's export limit), and for each part ticks those filters and clicks Tickertape's own **Export** button. Files are named `vithai-<mf|in|us>-<date>-partNofM.csv`. The first time, Chrome asks to allow multiple downloads from tickertape.in; choose Allow. If Tickertape changes its page layout, this script is the one place to update.
