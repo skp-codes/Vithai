@@ -1,0 +1,16 @@
+{
+  "name": "vithai",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:migrate:local": "wrangler d1 migrations apply vithai --local",
+    "db:migrate": "wrangler d1 migrations apply vithai --remote",
+    "refresh": "node scripts/refresh.mjs",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}

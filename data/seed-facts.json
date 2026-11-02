@@ -1,0 +1,235 @@
+[
+ [
+  "^Nippon India Large Cap Fund",
+  {
+   "expenseRatio": 0.59,
+   "aum": 51296,
+   "exitLoad": 1,
+   "exitLoadText": "1% if redeemed within 7 days",
+   "asOf": "2026-11-02",
+   "src": "Coin"
+  }
+ ],
+ [
+  "^Invesco India Mid ?Cap Fund",
+  {
+   "expenseRatio": 0.49,
+   "aum": 15749,
+   "exitLoad": 1,
+   "exitLoadText": "Within 1 year: 10% of units free, 1% on the rest",
+   "asOf": "2026-11-02",
+   "src": "Coin"
+  }
+ ],
+ [
+  "^Kotak US Specific Equity Passive",
+  {
+   "expenseRatio": 0.34,
+   "aum": 4689,
+   "exitLoad": 0,
+   "status": "open",
+   "asOf": "2026-11-02",
+   "src": "INDmoney"
+  }
+ ],
+ [
+  "^Franklin India Corporate (Bond|Debt)",
+  {
+   "expenseRatio": 0.26,
+   "aum": 1409,
+   "exitLoad": 0,
+   "asOf": "2026-11-02",
+   "src": "INDmoney"
+  }
+ ],
+ [
+  "^Axis Corporate Bond",
+  {
+   "expenseRatio": 0.36,
+   "aum": 7453,
+   "asOf": "2026-10-30",
+   "src": "INDmoney"
+  }
+ ],
+ [
+  "^Nippon India Corporate Bond",
+  {
+   "expenseRatio": 0.37,
+   "aum": 8907,
+   "asOf": "2026-10-30",
+   "src": "INDmoney"
+  }
+ ],
+ [
+  "^Kotak Corporate Bond",
+  {
+   "expenseRatio": 0.36,
+   "aum": 14791,
+   "asOf": "2026-10-30",
+   "src": "INDmoney"
+  }
+ ],
+ [
+  "^UTI.{0,3}Corporate Bond",
+  {
+   "expenseRatio": 0.32,
+   "aum": 4569,
+   "asOf": "2026-10-30",
+   "src": "INDmoney"
+  }
+ ],
+ [
+  "^Tata Corporate Bond",
+  {
+   "expenseRatio": 0.32,
+   "aum": 2676,
+   "asOf": "2026-10-30",
+   "src": "INDmoney"
+  }
+ ],
+ [
+  "^DSP Corporate Bond",
+  {
+   "expenseRatio": 0.29,
+   "aum": 2647,
+   "asOf": "2026-10-30",
+   "src": "INDmoney"
+  }
+ ],
+ [
+  "^ICICI Prudential Corporate Bond",
+  {
+   "expenseRatio": 0.37,
+   "aum": 28385,
+   "asOf": "2026-10-30",
+   "src": "INDmoney"
+  }
+ ],
+ [
+  "Gold BeES",
+  {
+   "expenseRatio": 0.81,
+   "aum": 58629,
+   "asOf": "2026-09-29",
+   "src": "Finplann"
+  }
+ ],
+ [
+  "^ICICI Prudential Gold ETF",
+  {
+   "expenseRatio": 0.49,
+   "aum": 28325,
+   "asOf": "2026-09-29",
+   "src": "Finplann"
+  }
+ ],
+ [
+  "^SBI Gold ETF",
+  {
+   "expenseRatio": 0.65,
+   "aum": 27085,
+   "asOf": "2026-09-29",
+   "src": "Finplann"
+  }
+ ],
+ [
+  "^HDFC Gold ETF",
+  {
+   "expenseRatio": 0.59,
+   "aum": 24417,
+   "asOf": "2026-09-29",
+   "src": "Finplann"
+  }
+ ],
+ [
+  "^Kotak Gold ETF",
+  {
+   "expenseRatio": 0.52,
+   "aum": 14989,
+   "exitLoad": 0,
+   "asOf": "2026-09-29",
+   "src": "Finplann"
+  }
+ ],
+ [
+  "^Tata Gold ETF",
+  {
+   "expenseRatio": 0.39,
+   "aum": 6172,
+   "asOf": "2026-09-29",
+   "src": "Finplann"
+  }
+ ],
+ [
+  "^Axis Gold ETF",
+  {
+   "expenseRatio": 0.52,
+   "aum": 5833,
+   "asOf": "2026-09-29",
+   "src": "Finplann"
+  }
+ ],
+ [
+  "^UTI.{0,3}Gold ETF",
+  {
+   "expenseRatio": 0.59,
+   "aum": 4514,
+   "asOf": "2026-09-29",
+   "src": "Finplann"
+  }
+ ],
+ [
+  "^Mirae Asset Gold ETF",
+  {
+   "expenseRatio": 0.35,
+   "aum": 3530,
+   "asOf": "2026-09-29",
+   "src": "Finplann"
+  }
+ ],
+ [
+  "^Aditya Birla Sun Life Gold ETF",
+  {
+   "expenseRatio": 0.44,
+   "aum": 3106,
+   "asOf": "2026-09-29",
+   "src": "Finplann"
+  }
+ ],
+ [
+  "^DSP Gold ETF",
+  {
+   "expenseRatio": 0.45,
+   "aum": 2855,
+   "asOf": "2026-09-29",
+   "src": "Finplann"
+  }
+ ],
+ [
+  "^Zerodha Gold ETF",
+  {
+   "expenseRatio": 0.35,
+   "aum": 2571,
+   "asOf": "2026-09-29",
+   "src": "Finplann"
+  }
+ ],
+ [
+  "^Edelweiss Gold ETF",
+  {
+   "expenseRatio": 0.5,
+   "aum": 1789,
+   "asOf": "2026-09-29",
+   "src": "Finplann"
+  }
+ ],
+ [
+  "^LIC MF Gold ETF",
+  {
+   "expenseRatio": 0.45,
+   "aum": 1500,
+   "asOf": "2026-09-29",
+   "src": "Finplann"
+  }
+ ]
+]

@@ -1,0 +1,97 @@
+# Vithai
+
+*Vithai* (விதை, "seed"): plant a little every month and watch it grow.
+
+Vithai is a household investment planner for Indian mutual funds, gold ETFs and Nifty 50 stocks:
+
+1. **Setup.** Enter your monthly amount and split it across large cap, mid/small cap, debt, international, gold and Nifty 50 stocks. You can exclude fund houses (for example ICICI or SBI).
+2. **Fund dashboard.** Every Direct-Growth fund in each slot is ranked on the metrics you choose. Defaults are long-term returns, Sharpe/Sortino, drawdown and cost. You can tick, untick and weight any metric, pin a fund, or reset to the Vithai default.
+3. **Monthly plan.** Shows how much to put into each fund, estimated units, and the Nifty 50 basket by index weight in fractional quantities. You record the units you actually bought.
+4. **Portfolio.** Shows invested amount, current value, gain, XIRR, and actual versus target allocation.
+5. **Household.** Works like MealPilot: one person starts a household and others join with an invite code and admin approval. Each member decides whether others in the household can see their portfolio.
+
+## How the data works
+
+| Data | Source | Freshness |
+|---|---|---|
+| NAVs, returns (1Y, 3Y, 5Y, 10Y CAGR), 3Y rolling returns, volatility, Sharpe, Sortino, max drawdown, % below ATH, gold ETF tracking error | Computed from each scheme's full daily NAV history from [mfapi.in](https://www.mfapi.in/), which mirrors AMFI | Twice a day, via a GitHub Action |
+| Expense ratio, AUM, exit load (key funds and all major gold ETFs) | Researched values in `data/seed-facts.json` | When updated in the repo |
+| Expense ratio, AUM, exit load, alpha, PE, YTM, holdings mix (everything else) | Your **Tickertape screener export**, uploaded on the Fund dashboard | Whenever you upload, about monthly |
+| Overrides (expense ratio, subscription status such as "closed to new SIPs") | Edited in the app by a household admin | Any time |
+| Nifty 50 weights and prices | Seeded on 2 Nov 2026; update on the Monthly plan page by pasting from NSE | Before you buy |
+
+Priority when values clash: **edited in app > researched > Tickertape**. Tickertape exports don't separate Direct and Regular plans and use 0 for missing values, so they only fill gaps.
+
+Tickertape and Kite are not connected automatically. Tickertape has no public API, and Kite logins can only be used by apps on Zerodha's paid Kite Connect API. You can add Kite Connect later to import holdings.
+
+## Architecture
+
+- **Cloudflare Worker** (`src/worker.js`) serves the static front-end from `public/` and the JSON API under `/api/*`.
+- **Cloudflare D1** (SQLite) stores users, households, sessions, settings, purchases, the fund universe and metrics, and facts.
+- **GitHub Action** (`.github/workflows/refresh-data.yml`) runs `scripts/refresh.mjs` twice a day. It downloads NAV histories, computes metrics and posts them to `/api/admin/ingest` using a shared secret.
+- The front-end is plain JavaScript modules with no build step. The metrics and ranking code in `public/js/` is shared by the browser and the refresh script.
+
+## Deploy (first time)
+
+You need a free Cloudflare account and Node.js 20+. On Windows PowerShell, use `npx.cmd` instead of `npx`.
+
+```powershell
+git clone https://github.com/skp-codes/Vithai.git
+cd Vithai
+npm install
+npx wrangler login
+
+# 1. Create the database, then paste the printed database_id into wrangler.toml
+npx wrangler d1 create vithai
+
+# 2. Create the tables and seed the Nifty 50 list
+npx wrangler d1 migrations apply vithai --remote
+
+# 3. Set the secret the data refresh uses (any long random string; keep a copy for step 5)
+npx wrangler secret put INGEST_TOKEN
+
+# 4. Deploy. This prints your https://vithai.<you>.workers.dev address
+npx wrangler deploy
+```
+
+5. **Add the data refresh secrets on GitHub.** In the repo, go to **Settings → Secrets and variables → Actions → New repository secret** and add:
+   - `VITHAI_URL`: your site address from step 4, e.g. `https://vithai.<you>.workers.dev`
+   - `INGEST_TOKEN`: the same value as in step 3
+6. **Load data now.** Under **Actions → Refresh fund data → Run workflow**. It takes about 3–5 minutes. After that it runs on its own twice a day.
+7. Open the site, choose **Start a household**, and you're the admin.
+
+**Updating later:** after pulling changes, run `npx wrangler d1 migrations apply vithai --remote` (only if `migrations/` changed) and `npx wrangler deploy`.
+
+### Custom domain
+
+Add your domain to Cloudflare (Websites → Add a site, then switch the nameservers at your registrar). Then go to **Workers & Pages → vithai → Settings → Domains & Routes → Add → Custom domain** and enter e.g. `vithai.yourdomain.com`. Cloudflare issues the HTTPS certificate automatically. Update the `VITHAI_URL` secret on GitHub to the new address.
+
+## Local development
+
+```powershell
+npm install
+npx wrangler d1 migrations apply vithai --local
+echo INGEST_TOKEN=local-test-token > .dev.vars
+npx wrangler dev                 # http://localhost:8787
+node tests/make-fixture.mjs      # synthetic data for 18 funds -> data/snapshot.fixture.json
+curl -X POST http://localhost:8787/api/admin/ingest -H "authorization: Bearer local-test-token" -H "content-type: application/json" --data @data/snapshot.fixture.json
+npm test                         # metrics, ranking and name-matching tests
+```
+
+To test against real data locally, run `node scripts/refresh.mjs --out data/snapshot.json` and post that file the same way.
+
+## Default ranking criteria
+
+Each fund's score (0–100) is the weighted average of its percentile on each ticked metric, among eligible funds in the slot. Missing values are skipped and never count as "best". Funds with less than half the criteria data rank below the rest.
+
+| Slot | Eligible | Metrics (weight) |
+|---|---|---|
+| Large cap | 5+ years old | CAGR 5Y (1.5), 10Y, 3Y, 3Y rolling avg, Sharpe (1.5), Sortino, max drawdown, expense ratio |
+| Mid/small | 5+ years, Mid Cap (tick Small Cap to include) | same as large cap |
+| Debt | 5+ years, Corporate Bond (tick Banking & PSU to include) | CAGR 3Y (1.5), 5Y, 1Y (0.5), Sharpe (1.5), max drawdown, volatility (0.5), expense ratio (1.5) |
+| International | 3+ years | CAGR 3Y (1.5), 5Y, Sharpe (1.5), Sortino, max drawdown, expense ratio |
+| Gold ETFs | 3+ years | expense ratio (2), tracking error (2), AUM, CAGR 3Y (0.5) |
+
+Sharpe and Sortino use a 6.5% risk-free rate over the last 3 years. Max drawdown is over the last 5 years.
+
+*Not financial advice. Rankings are backward-looking, and past performance does not guarantee future returns.*

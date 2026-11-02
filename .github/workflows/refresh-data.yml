@@ -1,0 +1,23 @@
+name: Refresh fund data
+
+on:
+  schedule:
+    # 01:20 UTC = 06:50 IST, after mfapi.in's overnight AMFI update; and 13:20 UTC = 18:50 IST
+    - cron: '20 1 * * *'
+    - cron: '20 13 * * *'
+  workflow_dispatch: {}
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Compute metrics and upload to Vithai
+        env:
+          VITHAI_URL: ${{ secrets.VITHAI_URL }}
+          INGEST_TOKEN: ${{ secrets.INGEST_TOKEN }}
+        run: node scripts/refresh.mjs
