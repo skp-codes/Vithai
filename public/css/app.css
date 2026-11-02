@@ -73,6 +73,11 @@ label.f { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4
 .input.num { font-family: var(--mono); text-align: right; }
 .row { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
 .row > * { flex: 1 1 160px; }
+.row.tight > * { flex: 0 0 auto; }
+.row.tight { flex-wrap: nowrap; }
+.sechead { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+.sechead > div:first-child { flex: 1 1 220px; }
+.sechead .row { flex: 0 0 auto; gap: 6px; }
 .btn { border: 1px solid var(--line); background: var(--card); border-radius: 8px; padding: 8px 14px; cursor: pointer; display: inline-flex; align-items: center; gap: 7px; font-size: 13px; white-space: nowrap; }
 .btn:hover { border-color: #b9beb5; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
@@ -149,6 +154,8 @@ table.t td.nm { white-space: normal; min-width: 220px; max-width: 340px; }
 .modal[hidden] { display: none; }
 .modal-card { background: var(--card); border-radius: 12px; padding: 22px; width: 100%; max-width: 640px; max-height: 88vh; overflow: auto; box-shadow: 0 20px 50px rgba(0,0,0,.3); }
 .modal-card h3 { margin-top: 0; }
+.modal-card.wide { max-width: 1100px; }
+.t.sched td, .t.sched th { padding: 5px 8px; }
 .modal-card .grid2 { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
 .kv { display: grid; grid-template-columns: 1fr auto; gap: 4px 16px; font-size: 13px; }
 .kv div:nth-child(odd) { color: var(--muted); }

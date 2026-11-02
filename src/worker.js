@@ -20,6 +20,7 @@ export const DEFAULT_SETTINGS = {
   usdInr: null,      // rupees per US dollar, entered in Setup
   usBasket: [],      // [{ key, name, weight }] US stocks bought in the US slot
   stockCriteria: {}, // per-market overrides of the stock ranking criteria
+  niftyPlan: null,   // { mode: 'monthly'|'weekly'|'whole', startMonth, excluded: [], phases: {} }
 };
 
 class HttpError extends Error {
@@ -87,6 +88,12 @@ async function route(request, env, url) {
   if (p === '/api/transactions' && m === 'GET') return json({ transactions: await listTx(env, me.id, url.searchParams.get('month')) });
   if (p === '/api/transactions' && m === 'POST') return addTx(request, env, me);
   if (p.startsWith('/api/transactions/') && m === 'DELETE') return delTx(env, me, p.slice(18));
+  if (p.startsWith('/api/transactions/') && m === 'PUT') return editTx(request, env, me, p.slice(18));
+  if (p.startsWith('/api/plans/') && m === 'GET') return getPlan(env, me, p.slice(11));
+  if (p.startsWith('/api/plans/') && m === 'PUT') return putPlan(request, env, me, p.slice(11));
+  if (p.startsWith('/api/plans/') && m === 'DELETE') return delPlan(env, me, p.slice(11));
+  if (p === '/api/backup' && m === 'GET') return json(await buildBackup(env, me, url.searchParams.get('scope') === 'household' ? 'household' : 'me'));
+  if (p === '/api/delete-data' && m === 'POST') return deleteData(request, env, me);
   if (p === '/api/household' && m === 'GET') return getHousehold(env, me);
   if (p.startsWith('/api/household/members/')) return memberAction(request, env, me, p.slice(23), m);
   if (p.startsWith('/api/members/') && p.endsWith('/portfolio') && m === 'GET') return memberPortfolio(env, me, p.slice(13, -10));
@@ -256,6 +263,7 @@ async function putSettings(request, env, me) {
   if (b.usdInr !== undefined) s.usdInr = num(b.usdInr) > 0 ? num(b.usdInr) : null;
   if (Array.isArray(b.usBasket)) s.usBasket = b.usBasket.slice(0, 100).map((x) => ({ key: str(x.key, 200), name: str(x.name, 200), weight: Math.max(0, num(x.weight) ?? 1) })).filter((x) => x.key);
   if (b.stockCriteria && typeof b.stockCriteria === 'object') s.stockCriteria = b.stockCriteria;
+  if (b.niftyPlan && typeof b.niftyPlan === 'object') s.niftyPlan = b.niftyPlan;
   if (!s.usSlot) s.alloc.usstocks = 0;
   const data = JSON.stringify(s);
   if (data.length > 50000) throw new HttpError(400, 'Settings too large.');
@@ -481,6 +489,125 @@ async function putNifty(request, env, me) {
   return getNifty(env, me);
 }
 
+// ---------------------------------------------------------------- monthly plans
+const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+async function getPlan(env, me, month) {
+  if (!MONTH_RE.test(month)) throw new HttpError(400, 'Month must look like 2026-11.');
+  const [cur, prev] = await env.DB.batch([
+    env.DB.prepare('SELECT month, data, updated_at FROM plans WHERE user_id = ? AND month = ?').bind(me.id, month),
+    env.DB.prepare('SELECT month, data FROM plans WHERE user_id = ? AND month < ? ORDER BY month DESC LIMIT 1').bind(me.id, month),
+  ]);
+  const c = cur.results[0], pr = prev.results[0];
+  return json({ plan: c ? { month: c.month, updatedAt: c.updated_at, ...JSON.parse(c.data) } : null, previous: pr ? { month: pr.month, ...JSON.parse(pr.data) } : null });
+}
+async function putPlan(request, env, me, month) {
+  if (!MONTH_RE.test(month)) throw new HttpError(400, 'Month must look like 2026-11.');
+  const b = await body(request);
+  const lines = (Array.isArray(b.lines) ? b.lines : []).slice(0, 200).map((l) => ({
+    id: str(l.id, 40) || randomId(6), slot: SLOTS.includes(l.slot) ? l.slot : null,
+    assetId: str(l.assetId, 300), assetName: str(l.assetName, 200), amount: Math.max(0, num(l.amount) ?? 0),
+  })).filter((l) => l.slot && l.assetId);
+  const data = JSON.stringify({ lines, note: str(b.note, 1000) });
+  await env.DB.prepare(
+    "INSERT INTO plans (user_id, month, data, updated_at) VALUES (?, ?, ?, datetime('now')) ON CONFLICT(user_id, month) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at",
+  ).bind(me.id, month, data).run();
+  return json({ ok: true, plan: { month, lines } });
+}
+async function delPlan(env, me, month) {
+  await env.DB.prepare('DELETE FROM plans WHERE user_id = ? AND month = ?').bind(me.id, month).run();
+  return json({ ok: true });
+}
+
+// ---------------------------------------------------------------- backup & delete
+async function buildBackup(env, me, scope) {
+  if (scope === 'household' && me.role !== 'admin') throw new HttpError(403, 'Only the household admin can back up the whole household.');
+  const users = scope === 'household'
+    ? (await env.DB.prepare('SELECT id, name, email, role, status, share_dashboard, created_at FROM users WHERE household_id = ?').bind(me.household_id).all()).results
+    : [{ id: me.id, name: me.name, email: me.email, role: me.role, status: me.status, share_dashboard: me.share_dashboard, created_at: me.created_at }];
+  const people = [];
+  for (const u of users) {
+    const [st, pl, tx] = await env.DB.batch([
+      env.DB.prepare('SELECT data FROM settings WHERE user_id = ?').bind(u.id),
+      env.DB.prepare('SELECT month, data, updated_at FROM plans WHERE user_id = ? ORDER BY month').bind(u.id),
+      env.DB.prepare('SELECT * FROM transactions WHERE user_id = ? ORDER BY trade_date').bind(u.id),
+    ]);
+    people.push({
+      user: u, settings: st.results[0] ? JSON.parse(st.results[0].data) : null,
+      plans: pl.results.map((r) => ({ month: r.month, updatedAt: r.updated_at, ...JSON.parse(r.data) })),
+      transactions: tx.results.map(({ user_id, ...t }) => t), // eslint-disable-line no-unused-vars
+    });
+  }
+  const out = { app: 'Vithai', version: 1, scope, exportedAt: new Date().toISOString(), exportedBy: me.email, people };
+  if (scope === 'household') {
+    const hid = me.household_id;
+    const [hh, nifty, metaRows, facts] = await env.DB.batch([
+      env.DB.prepare('SELECT id, name, created_at FROM households WHERE id = ?').bind(hid),
+      env.DB.prepare('SELECT symbol, name, weight, ltp, updated_at FROM household_nifty50 WHERE household_id = ?').bind(hid),
+      env.DB.prepare("SELECT key, value FROM meta WHERE key LIKE 'colmap:' || ? || ':%' OR key = 'tickertapeUploadedAt:' || ?").bind(hid, hid),
+      env.DB.prepare('SELECT code, data, updated_at FROM fund_facts WHERE source = ?').bind(`manual:${hid}`),
+    ]);
+    out.household = { ...hh.results[0], nifty50: nifty.results, columnMaps: metaRows.results, fundFactEdits: facts.results };
+    if (env.DATA) {
+      const { keys } = await env.DATA.list({ prefix: `hh:${hid}:dataset:` });
+      out.household.tickertapeImports = keys.map((k) => ({ dataset: k.name.split(':').pop(), ...k.metadata }));
+    }
+  }
+  return out;
+}
+
+function toBase64(text) {
+  const bytes = new TextEncoder().encode(text);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+
+async function emailBackup(env, to, backup, label) {
+  if (!env.RESEND_API_KEY) return { sent: false, reason: 'Email is not set up for this site (see README).' };
+  const name = `vithai-backup-${backup.scope}-${backup.exportedAt.slice(0, 10)}.json`;
+  const res = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${env.RESEND_API_KEY}`, 'content-type': 'application/json' },
+    body: JSON.stringify({
+      from: env.EMAIL_FROM || 'Vithai <onboarding@resend.dev>', to: [to],
+      subject: `Vithai backup before deleting ${label}`,
+      text: `Attached is a full backup of ${label}, taken ${backup.exportedAt} just before it was deleted.\n\nKeep this file: it is the only copy.`,
+      attachments: [{ filename: name, content: toBase64(JSON.stringify(backup, null, 1)) }],
+    }),
+  });
+  return res.ok ? { sent: true } : { sent: false, reason: `Email failed (${res.status}): ${(await res.text()).slice(0, 200)}` };
+}
+
+async function deleteData(request, env, me) {
+  const b = await body(request);
+  const scope = b.scope === 'household' ? 'household' : 'me';
+  if (str(b.confirm, 20) !== 'DELETE') throw new HttpError(400, 'Type DELETE to confirm.');
+  const backup = await buildBackup(env, me, scope);
+  const label = scope === 'household' ? `all data for the household "${me.household_name}"` : `all of ${me.name}'s Vithai data`;
+  const mail = await emailBackup(env, me.email, backup, label);
+  // Without email, only delete once the browser confirms it saved the backup file
+  if (!mail.sent && !b.backupDownloaded) throw new HttpError(409, `${mail.reason} Download the backup first, then confirm again.`);
+  const ids = scope === 'household' ? backup.people.map((p) => p.user.id) : [me.id];
+  const stmts = [];
+  for (const id of ids) {
+    stmts.push(env.DB.prepare('DELETE FROM transactions WHERE user_id = ?').bind(id));
+    stmts.push(env.DB.prepare('DELETE FROM plans WHERE user_id = ?').bind(id));
+    stmts.push(env.DB.prepare('DELETE FROM settings WHERE user_id = ?').bind(id));
+  }
+  if (scope === 'household') {
+    const hid = me.household_id;
+    stmts.push(env.DB.prepare('DELETE FROM household_nifty50 WHERE household_id = ?').bind(hid));
+    stmts.push(env.DB.prepare("DELETE FROM meta WHERE key LIKE 'colmap:' || ? || ':%' OR key IN ('tickertape:' || ?, 'tickertapeUploadedAt:' || ?)").bind(hid, hid, hid));
+    stmts.push(env.DB.prepare('DELETE FROM fund_facts WHERE source = ?').bind(`manual:${hid}`));
+  }
+  for (let i = 0; i < stmts.length; i += 40) await env.DB.batch(stmts.slice(i, i + 40));
+  if (scope === 'household' && env.DATA) {
+    const { keys } = await env.DATA.list({ prefix: `hh:${me.household_id}:dataset:` });
+    for (const k of keys) await env.DATA.delete(k.name);
+  }
+  return json({ ok: true, emailed: mail.sent, emailNote: mail.sent ? `A backup was emailed to ${me.email}.` : mail.reason });
+}
+
 // ---------------------------------------------------------------- transactions
 async function listTx(env, userId, month) {
   const q = month
@@ -493,8 +620,7 @@ async function listTx(env, userId, month) {
   }));
 }
 
-async function addTx(request, env, me) {
-  const b = await body(request);
+function readTx(b) {
   const slot = str(b.slot, 20);
   if (!SLOTS.includes(slot)) throw new HttpError(400, 'Unknown slot.');
   const tradeDate = str(b.tradeDate, 10);
@@ -504,11 +630,25 @@ async function addTx(request, env, me) {
   if (!(units > 0)) throw new HttpError(400, 'Units must be more than zero.');
   if (!(price > 0)) throw new HttpError(400, 'Enter the NAV or price you paid.');
   const amount = num(b.amount) > 0 ? num(b.amount) : Math.round(units * price * 100) / 100;
+  return { slot, tradeDate, month, units, price, amount, assetId: str(b.assetId, 300), assetName: str(b.assetName, 200) || str(b.assetId, 300), note: str(b.note, 300) || null };
+}
+
+async function addTx(request, env, me) {
+  const t = readTx(await body(request));
   const id = randomId();
   await env.DB.prepare(
     'INSERT INTO transactions (id, user_id, trade_date, month, slot, asset_id, asset_name, units, price, amount, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-  ).bind(id, me.id, tradeDate, month, slot, str(b.assetId, 300), str(b.assetName, 200) || str(b.assetId, 300), units, price, amount, str(b.note, 300) || null).run();
+  ).bind(id, me.id, t.tradeDate, t.month, t.slot, t.assetId, t.assetName, t.units, t.price, t.amount, t.note).run();
   return json({ ok: true, id });
+}
+
+async function editTx(request, env, me, id) {
+  const t = readTx(await body(request));
+  const r = await env.DB.prepare(
+    'UPDATE transactions SET trade_date = ?, month = ?, slot = ?, asset_id = ?, asset_name = ?, units = ?, price = ?, amount = ?, note = ? WHERE id = ? AND user_id = ?',
+  ).bind(t.tradeDate, t.month, t.slot, t.assetId, t.assetName, t.units, t.price, t.amount, t.note, id, me.id).run();
+  if (!r.meta.changes) throw new HttpError(404, 'Purchase not found.');
+  return json({ ok: true });
 }
 
 async function delTx(env, me, id) {

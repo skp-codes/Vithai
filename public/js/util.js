@@ -42,7 +42,8 @@ export function toast(msg) {
 
 export function openModal(html, onMount) {
   const m = document.getElementById('modal');
-  document.getElementById('modal-card').innerHTML = html;
+  const card = document.getElementById('modal-card');
+  card.innerHTML = html; card.classList.remove('wide');
   m.hidden = false;
   const close = () => { m.hidden = true; document.removeEventListener('keydown', onKey); };
   const onKey = (e) => { if (e.key === 'Escape') close(); };

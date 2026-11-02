@@ -1,7 +1,8 @@
 // Vithai front-end: a small single-page app with hash routes.
 import { api, esc, inr, num, pct, signCls, today, thisMonth, monthLabel, toast, openModal, xirr, waitForXLSX } from './util.js'; // eslint-disable-line no-unused-vars
 import { METRICS, SLOTS, DEFAULT_CRITERIA, rankFunds } from './ranking.js';
-import { renderStocks, usPriceLookup } from './stocks.js';
+import { renderStocks, usPriceLookup } from './stocks.js'; // eslint-disable-line no-unused-vars
+import { renderPlan } from './plan.js';
 import { KINDS, readExport, mergeParts, toDataset, uploadDataset, loadDataset, clearDatasetCache, mfFactsRows, niftyPricesFrom, saveMfFacts, autoMap, keyFieldsFor, defaultLabel, getColumnMap, saveColumnMap } from './tickertape.js';
 
 const S = { me: null, settings: null, funds: [], meta: {}, nifty: [], route: 'setup', fundsTab: 'largecap', loaded: false };
@@ -82,8 +83,8 @@ function renderShell() {
     <main id="main"></main></div>`;
   document.getElementById('logout').onclick = async () => { await api('POST', '/api/auth/logout'); location.hash = ''; location.reload(); };
   const main = document.getElementById('main');
-  const ctx = { S, saveSettings };
-  ({ setup: renderSetup, funds: renderFunds, 'stocks-in': (m) => renderStocks(m, 'in', ctx), 'stocks-us': (m) => renderStocks(m, 'us', ctx), plan: renderPlan, portfolio: renderPortfolio, data: renderData, household: renderHousehold })[S.route](main);
+  const ctx = { S, saveSettings, chosenFund, rankedFor, isExcluded };
+  ({ setup: renderSetup, funds: renderFunds, 'stocks-in': (m) => renderStocks(m, 'in', ctx), 'stocks-us': (m) => renderStocks(m, 'us', ctx), plan: (m) => renderPlan(m, ctx), portfolio: renderPortfolio, data: renderData, household: renderHousehold })[S.route](main);
   if (S.me.mustChangePassword) promptPasswordChange(true);
 }
 
@@ -378,164 +379,6 @@ function fundDetail(code, main) {
   });
 }
 
-// ---------------------------------------------------------------- MONTHLY PLAN
-let planMonth = thisMonth();
-async function renderPlan(main) {
-  main.innerHTML = '<div class="boot" style="height:200px">Loading plan…</div>';
-  const { transactions } = await api('GET', `/api/transactions?month=${planMonth}`);
-  const s = S.settings;
-  const bought = (slot, id) => transactions.filter((t) => t.slot === slot && (!id || t.assetId === id));
-  const sum = (arr, k) => arr.reduce((a, t) => a + t[k], 0);
-  const lines = FUND_SLOTS.filter((k) => (s.alloc[k] || 0) > 0).map((k) => {
-    const amt = s.monthlyTotal * s.alloc[k] / 100;
-    const { fund } = chosenFund(k);
-    const done = bought(k);
-    return { slot: k, amt, fund, done };
-  });
-  const niftyAmt = s.monthlyTotal * (s.alloc.nifty50 || 0) / 100;
-  const wSum = S.nifty.reduce((a, x) => a + x.weight, 0) || 1;
-  const totalDone = sum(transactions, 'amount');
-  const usAmt = s.usSlot ? s.monthlyTotal * (s.alloc.usstocks || 0) / 100 : 0;
-  let usLines = [];
-  if (usAmt > 0) {
-    let usDs = null;
-    try { usDs = await loadDataset('us'); } catch { /* no US data yet */ }
-    const priceOf = usPriceLookup(usDs);
-    const basket = s.usBasket || [];
-    const wTot = basket.reduce((a, x) => a + (x.weight || 0), 0) || 1;
-    usLines = basket.map((x) => {
-      const inrAmt = usAmt * (x.weight || 0) / wTot;
-      const usd = priceOf(x.key);
-      return { ...x, inrAmt, usd, qty: usd && s.usdInr ? inrAmt / s.usdInr / usd : null, done: bought('usstocks', x.key) };
-    });
-  }
-
-  main.innerHTML = `
-    <div class="page-head"><div><h2>Monthly plan</h2><p>What to buy this month, and a record of what you actually bought.</p></div><div class="grow"></div>
-      <div><label class="f" for="pm">Month</label><input class="input" type="month" id="pm" value="${planMonth}"></div></div>
-    <div class="stats">
-      <div class="stat"><div class="k">Planned for ${esc(monthLabel(planMonth))}</div><div class="v">${inr(s.monthlyTotal)}</div></div>
-      <div class="stat"><div class="k">Recorded so far</div><div class="v">${inr(totalDone)}</div><div class="d">${s.monthlyTotal ? Math.round(totalDone / s.monthlyTotal * 100) : 0}% of plan</div></div>
-      <div class="stat"><div class="k">Still to invest</div><div class="v">${inr(Math.max(0, s.monthlyTotal - totalDone))}</div></div>
-    </div>
-    <div class="card"><h3>Funds</h3><p class="sub">Units are estimates at the latest NAV; your actual units depend on the NAV on the day you buy.</p>
-      <div class="tablewrap"><table class="t"><thead><tr><th>Slot</th><th>Fund</th><th class="r">Plan</th><th class="r">Latest NAV</th><th class="r">Est. units</th><th class="r">Recorded</th><th class="r">Left</th><th></th></tr></thead>
-      <tbody>${lines.map((l) => `<tr><td>${SLOTS[l.slot].label} <span class="muted">${s.alloc[l.slot]}%</span></td>
-        <td class="nm">${l.fund ? esc(l.fund.name) + `<span class="a">${esc(l.fund.amc)}${l.slot === 'gold' ? ' · buy on Kite as an ETF' : ' · Coin SIP'}</span>` : '<span class="warn">No fund chosen</span>'}</td>
-        <td class="r">${inr(l.amt)}</td><td class="r">${l.fund ? num(l.fund.nav, 4) : '–'}</td><td class="r">${l.fund ? num(l.amt / l.fund.nav, 3) : '–'}</td>
-        <td class="r">${inr(sum(l.done, 'amount'))}</td><td class="r">${inr(Math.max(0, l.amt - sum(l.done, 'amount')))}</td>
-        <td>${l.fund ? `<button class="btn small" data-rec="${l.slot}">Record purchase</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="8" class="muted">No fund slots allocated in Setup.</td></tr>'}</tbody></table></div></div>
-    ${niftyAmt > 0 ? `<div class="card"><div class="row" style="align-items:center"><div><h3>Nifty 50 stocks · ${inr(niftyAmt)}</h3><p class="sub" style="margin:0">Split by index weight, in fractional quantities. Update prices before you buy.</p></div>
-        <div style="flex:0 0 auto" class="row">${S.me.role === 'admin' ? '<button class="btn" id="niftyupd">Update prices / weights</button>' : ''}<button class="btn" id="niftyall">Record whole basket as planned</button></div></div>
-      <div class="tablewrap" style="margin-top:12px;max-height:60vh"><table class="t"><thead><tr><th>Symbol</th><th class="r">Weight</th><th class="r">Amount</th><th class="r">Price</th><th class="r">Qty</th><th class="r">Recorded</th><th></th></tr></thead>
-      <tbody>${S.nifty.map((x) => { const a = niftyAmt * x.weight / wSum; const d = bought('nifty50', x.symbol); return `<tr><td><b>${esc(x.symbol)}</b></td><td class="r">${pct(x.weight)}</td><td class="r">${inr(a, 2)}</td><td class="r">${num(x.ltp, 2)}</td><td class="r">${x.ltp ? num(a / x.ltp, 4) : '–'}</td><td class="r">${d.length ? num(sum(d, 'units'), 4) : '–'}</td><td><button class="btn small" data-recn="${esc(x.symbol)}">Record</button></td></tr>`; }).join('')}</tbody></table></div>
-      <p class="note">Prices last updated ${esc((S.nifty[0]?.updated_at || '').slice(0, 10) || '–')}.</p></div>` : ''}
-    ${usAmt > 0 ? `<div class="card"><h3>US stocks · ${inr(usAmt)}${s.usdInr ? ` <span class="muted">(about $${num(usAmt / s.usdInr, 2)} at ₹${num(s.usdInr, 2)})</span>` : ''}</h3>
-      <p class="sub">Split across your US basket by weight. ${s.usdInr ? '' : '<span class="warn">Enter the rupee–dollar rate in Setup to see quantities.</span>'} Edit the basket on the <a href="#/stocks-us">US stocks</a> page.</p>
-      <div class="tablewrap"><table class="t"><thead><tr><th>Stock</th><th class="r">Weight</th><th class="r">Amount (₹)</th><th class="r">Price ($)</th><th class="r">Qty</th><th class="r">Recorded</th><th></th></tr></thead>
-      <tbody>${usLines.map((x, i) => `<tr><td class="nm">${esc(x.name)}</td><td class="r"><input class="w input num" data-usw="${i}" type="number" min="0" step="1" value="${x.weight}" style="width:70px;padding:3px 6px"></td><td class="r">${inr(x.inrAmt, 2)}</td><td class="r">${num(x.usd, 2)}</td><td class="r">${x.qty ? num(x.qty, 4) : '–'}</td><td class="r">${x.done.length ? num(sum(x.done, 'units'), 4) : '–'}</td><td><button class="btn small" data-recu="${i}">Record</button></td></tr>`).join('') || '<tr><td colspan="7" class="muted">Your US basket is empty. Add stocks on the US stocks page.</td></tr>'}</tbody></table></div></div>` : ''}
-    <div class="card"><h3>Recorded in ${esc(monthLabel(planMonth))}</h3>
-      <div class="tablewrap"><table class="t"><thead><tr><th>Date</th><th>Slot</th><th>Asset</th><th class="r">Units</th><th class="r">Price</th><th class="r">Amount</th><th></th></tr></thead>
-      <tbody>${transactions.map((t) => `<tr><td>${esc(t.tradeDate)}</td><td>${SLOTS[t.slot]?.short || t.slot}</td><td class="nm">${esc(t.assetName)}</td><td class="r">${num(t.units, 4)}</td><td class="r">${num(t.price, 4)}</td><td class="r">${inr(t.amount, 2)}</td><td><button class="btn small danger" data-del="${t.id}">Delete</button></td></tr>`).join('') || '<tr><td colspan="7" class="muted">Nothing recorded yet this month.</td></tr>'}</tbody></table></div></div>`;
-
-  document.getElementById('pm').onchange = (e) => { planMonth = e.target.value || thisMonth(); renderPlan(main); };
-  main.querySelectorAll('[data-rec]').forEach((b) => (b.onclick = () => {
-    const l = lines.find((x) => x.slot === b.dataset.rec);
-    recordModal({ slot: l.slot, assetId: l.fund.code, assetName: l.fund.name, price: l.fund.nav, units: +(l.amt / l.fund.nav).toFixed(3) }, () => renderPlan(main));
-  }));
-  main.querySelectorAll('[data-recn]').forEach((b) => (b.onclick = () => {
-    const x = S.nifty.find((n) => n.symbol === b.dataset.recn);
-    const a = niftyAmt * x.weight / wSum;
-    recordModal({ slot: 'nifty50', assetId: x.symbol, assetName: x.symbol, price: x.ltp, units: x.ltp ? +(a / x.ltp).toFixed(4) : '' }, () => renderPlan(main));
-  }));
-  main.querySelectorAll('[data-del]').forEach((b) => (b.onclick = async () => {
-    if (!confirm('Delete this purchase record?')) return;
-    try { await api('DELETE', `/api/transactions/${b.dataset.del}`); toast('Deleted'); renderPlan(main); } catch (e) { toast(e.message); }
-  }));
-  document.getElementById('niftyall')?.addEventListener('click', async () => {
-    if (!confirm(`Record all ${S.nifty.length} Nifty 50 purchases at the planned quantities and current prices?`)) return;
-    try {
-      for (const x of S.nifty) {
-        if (!x.ltp) continue;
-        const a = niftyAmt * x.weight / wSum;
-        await api('POST', '/api/transactions', { slot: 'nifty50', assetId: x.symbol, assetName: x.symbol, tradeDate: today(), month: planMonth, units: +(a / x.ltp).toFixed(4), price: x.ltp });
-      }
-      toast('Nifty 50 basket recorded'); renderPlan(main);
-    } catch (e) { toast(e.message); }
-  });
-  document.getElementById('niftyupd')?.addEventListener('click', () => niftyModal(() => renderPlan(main)));
-  main.querySelectorAll('[data-usw]').forEach((inp) => (inp.onchange = async () => {
-    const basket = (S.settings.usBasket || []).map((x, i) => (i === +inp.dataset.usw ? { ...x, weight: Number(inp.value) || 0 } : x));
-    await saveSettings({ usBasket: basket }, 'Basket weights saved'); renderPlan(main);
-  }));
-  main.querySelectorAll('[data-recu]').forEach((b) => (b.onclick = () => {
-    const x = usLines[+b.dataset.recu];
-    recordModal({ slot: 'usstocks', assetId: x.key, assetName: x.name, price: x.usd && s.usdInr ? +(x.usd * s.usdInr).toFixed(2) : '', units: x.qty ? +x.qty.toFixed(4) : '', priceLabel: 'Price paid per share (₹, i.e. $ price × rate)' }, () => renderPlan(main));
-  }));
-}
-
-function recordModal(pre, done) {
-  openModal(`<h3>Record purchase</h3><p class="note">${esc(pre.assetName)}</p>
-    <form id="rf" style="display:grid;gap:12px">
-      <div class="row"><div><label class="f">Date bought</label><input class="input" name="tradeDate" type="date" value="${today()}" required></div>
-      <div><label class="f">Counts towards month</label><input class="input" name="month" type="month" value="${planMonth}"></div></div>
-      <div class="row"><div><label class="f">Units / quantity</label><input class="input num" name="units" type="number" step="any" min="0" value="${pre.units}" required></div>
-      <div><label class="f">${pre.priceLabel || (pre.slot === 'nifty50' ? 'Price' : 'NAV') + ' paid'}</label><input class="input num" name="price" type="number" step="any" min="0" value="${pre.price ?? ''}" required></div></div>
-      <div class="row"><div><label class="f">Total amount (₹)</label><input class="input num" name="amount" type="number" step="any" min="0"></div>
-      <div><label class="f">Note (optional)</label><input class="input" name="note"></div></div>
-      <p class="note">Leave the amount blank to use units × price. Check the actual units on your Coin / Kite contract note.</p>
-      <div class="row" style="justify-content:flex-end"><button class="btn" type="button" data-close>Cancel</button><button class="btn primary">Save</button></div>
-    </form>`, (root, close) => {
-    const f = root.querySelector('#rf');
-    const upd = () => { const u = +f.units.value, p = +f.price.value; f.amount.placeholder = u && p ? (u * p).toFixed(2) : ''; };
-    f.units.oninput = f.price.oninput = upd; upd();
-    f.onsubmit = async (e) => {
-      e.preventDefault();
-      const d = Object.fromEntries(new FormData(f).entries());
-      try { await api('POST', '/api/transactions', { ...d, slot: pre.slot, assetId: pre.assetId, assetName: pre.assetName }); close(); toast('Purchase recorded'); done(); } catch (err) { toast(err.message); }
-    };
-  });
-}
-
-function niftyModal(done) {
-  openModal(`<h3>Update Nifty 50 prices and weights</h3>
-    <p class="note">Paste the table from the NSE Nifty 50 page (Symbol and LTP columns), or a table with Symbol and Weight columns. You can also upload a CSV or Excel file with the same columns. Only symbols already in the list get price updates; tick the box to replace the whole constituent list.</p>
-    <textarea class="input" id="npaste" rows="8" placeholder="Symbol&#9;LTP&#9;…&#10;HDFCBANK&#9;700&#9;…"></textarea>
-    <div class="row" style="margin-top:10px"><label class="btn"><input type="file" id="nfile" accept=".csv,.xlsx,.xls" hidden>Choose file…</label>
-      <label class="toggle"><input type="checkbox" id="nreplace">Replace constituents (needs a Weight column)</label></div>
-    <div id="nprev" class="note" style="margin-top:8px"></div>
-    <div class="row" style="justify-content:flex-end;margin-top:14px"><button class="btn" data-close>Cancel</button><button class="btn primary" id="nsave" disabled>Save</button></div>`,
-  (root, close) => {
-    let rows = [];
-    const parseTable = (table) => {
-      const header = table[0].map((h) => String(h ?? '').trim().toLowerCase());
-      const ci = (re) => header.findIndex((h) => re.test(h));
-      const iS = ci(/^symbol/), iL = ci(/^ltp|last|price|close/), iW = ci(/weight/);
-      if (iS < 0) throw new Error('No "Symbol" column found.');
-      const n = (v) => { const x = parseFloat(String(v ?? '').replace(/[,%₹\s]/g, '')); return isFinite(x) ? x : null; };
-      return table.slice(1).filter((r) => r[iS]).map((r) => ({ symbol: String(r[iS]).trim().toUpperCase(), ltp: iL >= 0 ? n(r[iL]) : null, weight: iW >= 0 ? n(r[iW]) : null }))
-        .filter((r) => r.symbol && r.symbol !== 'NIFTY 50');
-    };
-    const show = () => {
-      root.querySelector('#nprev').textContent = rows.length ? `${rows.length} rows read · ${rows.filter((r) => r.ltp !== null).length} prices · ${rows.filter((r) => r.weight !== null).length} weights` : '';
-      root.querySelector('#nsave').disabled = !rows.length;
-    };
-    root.querySelector('#npaste').oninput = (e) => {
-      try { const lines = e.target.value.trim().split(/\r?\n/).map((l) => l.split(/\t|,(?=(?:[^"]*"[^"]*")*[^"]*$)/).map((c) => c.replace(/^"|"$/g, ''))); rows = lines.length > 1 ? parseTable(lines) : []; }
-      catch (err) { rows = []; root.querySelector('#nprev').textContent = err.message; return; }
-      show();
-    };
-    root.querySelector('#nfile').onchange = async (e) => {
-      try { const XLSX = await waitForXLSX(); const wb = XLSX.read(new Uint8Array(await e.target.files[0].arrayBuffer()), { type: 'array' }); rows = parseTable(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1 })); show(); }
-      catch (err) { root.querySelector('#nprev').textContent = err.message; }
-    };
-    root.querySelector('#nsave').onclick = async () => {
-      try { const r = await api('PUT', '/api/nifty', { rows, replaceWeights: root.querySelector('#nreplace').checked }); S.nifty = r.stocks; close(); toast('Nifty 50 data updated'); done(); }
-      catch (err) { toast(err.message); }
-    };
-  });
-}
-
 // ---------------------------------------------------------------- PORTFOLIO
 let portfolioMember = null;
 async function renderPortfolio(main) {
@@ -789,13 +632,24 @@ async function renderHousehold(main) {
         ${admin ? `<td>${m.id === S.me.id ? '' : m.status === 'pending'
           ? `<button class="btn small" data-act="approve" data-id="${m.id}">Approve</button> <button class="btn small danger" data-act="reject" data-id="${m.id}">Reject</button>`
           : `<button class="btn small" data-act="${m.role === 'admin' ? 'make-member' : 'make-admin'}" data-id="${m.id}">${m.role === 'admin' ? 'Make member' : 'Make admin'}</button> <button class="btn small" data-act="reset-password" data-id="${m.id}">Reset password</button> <button class="btn small danger" data-act="reject" data-id="${m.id}">Remove</button>`}</td>` : ''}</tr>`).join('')}</tbody></table></div></div>
-    <div class="card"><h3>Your password</h3><button class="btn" id="chpw">Change password</button></div>`;
+    <div class="card"><h3>Your password</h3><button class="btn" id="chpw">Change password</button></div>
+    <div class="card"><h3>Back up your data</h3><p class="sub">Download everything Vithai holds for you: setup, monthly plans and every purchase. The Excel file has your purchases and plans as tables; the backup file (.json) is the complete copy.</p>
+      <div class="row"><button class="btn" id="bkme" style="flex:0 0 auto">Download my backup (.json)</button><button class="btn" id="bkxl" style="flex:0 0 auto">Download my purchases and plans (Excel)</button>
+      ${admin ? '<button class="btn" id="bkhh" style="flex:0 0 auto">Download whole household backup (.json)</button>' : ''}</div></div>
+    <div class="card"><h3>Delete data</h3><p class="sub">Deleting can't be undone. A backup is emailed to you first (when email is set up for this site) and downloaded to this device.</p>
+      <div class="row"><button class="btn danger" id="delme" style="flex:0 0 auto">Delete all my data</button>${admin ? '<button class="btn danger" id="delhh" style="flex:0 0 auto">Delete all household data</button>' : ''}</div>
+      <p class="note">"All my data" removes your setup, plans and purchases; your sign-in stays. "All household data" does that for every member and also removes the household's Tickertape imports, column choices, fund edits and Nifty 50 prices.</p></div>`;
   document.getElementById('share').onchange = async (e) => {
     try { await api('PUT', '/api/me/sharing', { share: e.target.checked }); S.me.shareDashboard = e.target.checked; toast(e.target.checked ? 'Your portfolio is now visible to your household' : 'Your portfolio is now private'); renderHousehold(main); }
     catch (err) { toast(err.message); }
   };
   document.getElementById('copycode')?.addEventListener('click', () => { navigator.clipboard?.writeText(household.inviteCode); toast('Invite code copied'); });
   document.getElementById('chpw').onclick = () => promptPasswordChange(false);
+  document.getElementById('bkme').onclick = () => downloadBackup('me').catch((e) => toast(e.message));
+  document.getElementById('bkhh')?.addEventListener('click', () => downloadBackup('household').catch((e) => toast(e.message)));
+  document.getElementById('bkxl').onclick = () => downloadExcel().catch((e) => toast(e.message));
+  document.getElementById('delme').onclick = () => deleteDataModal('me');
+  document.getElementById('delhh')?.addEventListener('click', () => deleteDataModal('household'));
   main.querySelectorAll('[data-act]').forEach((b) => (b.onclick = async () => {
     const act = b.dataset.act;
     if ((act === 'reject' || act === 'reset-password') && !confirm(act === 'reject' ? 'Remove this member from the household?' : 'Reset this member\'s password?')) return;
@@ -806,6 +660,59 @@ async function renderHousehold(main) {
       renderHousehold(main);
     } catch (e) { toast(e.message); }
   }));
+}
+
+// ---------------------------------------------------------------- BACKUP & DELETE
+function saveFile(name, blob) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+async function downloadBackup(scope) {
+  const b = await api('GET', `/api/backup?scope=${scope}`);
+  saveFile(`vithai-backup-${scope === 'household' ? 'household' : S.me.name.replace(/\W+/g, '-').toLowerCase()}-${today()}.json`, new Blob([JSON.stringify(b, null, 1)], { type: 'application/json' }));
+  toast('Backup downloaded');
+  return b;
+}
+async function downloadExcel() {
+  const [XLSX, b] = await Promise.all([waitForXLSX(), api('GET', '/api/backup?scope=me')]);
+  const p = b.people[0];
+  const wb = XLSX.utils.book_new();
+  const tx = p.transactions.map((t) => ({ Date: t.trade_date, Month: t.month, Section: SLOTS[t.slot]?.label || t.slot, Asset: t.asset_name, 'Asset ID': t.asset_id, Units: t.units, Price: t.price, Amount: t.amount, Note: t.note || '' }));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(tx.length ? tx : [{ Date: 'No purchases recorded' }]), 'Purchases');
+  const pl = p.plans.flatMap((m) => (m.lines || []).map((l) => ({ Month: m.month, Section: SLOTS[l.slot]?.label || l.slot, Asset: l.assetName, 'Asset ID': l.assetId, 'Planned ₹': l.amount })));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(pl.length ? pl : [{ Month: 'No plans saved' }]), 'Monthly plans');
+  const al = Object.entries(p.settings?.alloc || {}).map(([k, v]) => ({ Section: SLOTS[k]?.label || k, 'Percent': v, 'Monthly ₹': Math.round((p.settings.monthlyTotal || 0) * v / 100) }));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(al.length ? al : [{ Section: 'No setup saved' }]), 'Allocation');
+  XLSX.writeFile(wb, `vithai-${S.me.name.replace(/\W+/g, '-').toLowerCase()}-${today()}.xlsx`);
+  toast('Excel file downloaded');
+}
+function deleteDataModal(scope) {
+  const hh = scope === 'household';
+  openModal(`<h3>${hh ? 'Delete all household data' : 'Delete all my data'}</h3>
+    <p>${hh ? 'This deletes every member\'s setup, plans and purchases, plus the household\'s imported data, column choices, fund edits and Nifty 50 prices. Members keep their sign-ins.' : 'This deletes your setup, monthly plans and every purchase you have recorded. You stay signed in and in your household.'}</p>
+    <p class="note">Step 1: download a backup to this device. Vithai also emails a copy to <b>${esc(S.me.email || 'you')}</b> if email is set up for this site.</p>
+    <button class="btn" id="dlbk">Download backup</button> <span id="dlok" class="note"></span>
+    <p class="note" style="margin-top:14px">Step 2: type <b>DELETE</b> to confirm.</p>
+    <input class="input" id="dconf" autocomplete="off" placeholder="DELETE">
+    <div class="row" style="justify-content:flex-end;margin-top:14px"><button class="btn" data-close>Cancel</button><button class="btn danger" id="dgo" disabled>Delete permanently</button></div>`, (root, close) => {
+    let downloaded = false;
+    const upd = () => { root.querySelector('#dgo').disabled = !(downloaded && root.querySelector('#dconf').value.trim() === 'DELETE'); };
+    root.querySelector('#dlbk').onclick = async () => {
+      try { await downloadBackup(scope); downloaded = true; root.querySelector('#dlok').textContent = '✓ Saved. Check your Downloads folder before going on.'; upd(); } catch (e) { toast(e.message); }
+    };
+    root.querySelector('#dconf').oninput = upd;
+    root.querySelector('#dgo').onclick = async () => {
+      if (!confirm(`Last check: permanently delete ${hh ? 'all household data' : 'all your data'}?`)) return;
+      try {
+        const r = await api('POST', '/api/delete-data', { scope, confirm: 'DELETE', backupDownloaded: downloaded });
+        close();
+        openModal(`<h3>Deleted</h3><p>${hh ? 'All household data' : 'All your data'} has been deleted.</p><p class="note">${esc(r.emailNote || '')}</p><div class="row" style="justify-content:flex-end"><button class="btn primary" data-close>OK</button></div>`);
+        await loadData(); if (location.hash === '#/setup') route(); else location.hash = '#/setup';
+      } catch (e) { toast(e.message); }
+    };
+  });
 }
 
 function promptPasswordChange(forced) {

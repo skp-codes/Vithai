@@ -6,7 +6,8 @@ Vithai is a household investment planner for Indian mutual funds, gold ETFs and 
 
 1. **Setup.** Enter your monthly amount and split it across large cap, mid/small cap, debt, international, gold and Nifty 50 stocks. You can exclude fund houses (for example ICICI or SBI).
 2. **Fund dashboard.** Every Direct-Growth fund in each slot is ranked on the metrics you choose. Defaults are long-term returns, Sharpe/Sortino, drawdown and cost. You can tick, untick and weight any metric, pin a fund, or reset to the Vithai default.
-3. **Monthly plan.** Shows how much to put into each fund, estimated units, and the Nifty 50 basket by index weight in fractional quantities. You record the units you actually bought.
+3. **Monthly plan.** Each person has their own plan for each month. Pick a month to see what's due: the funds in each section (several per section if you like), the Nifty 50 shares due that month, and your US basket. A new month starts as a draft copied from last month; add, drop or change any fund or amount just for that month. Record what you actually bought, and edit or delete any purchase later (deleting asks first).
+   - **Nifty 50 plan** (like the Excel planner): whole shares on a schedule, e.g. *HDFCBANK 1 every month, ICICIBANK 1 every 2 months, ULTRACEMCO 1 every 24 months*, worked out from your monthly budget and index weights, with first-buy months staggered so each month costs about the same. Every stock's shares, frequency and first month are editable. **Full schedule** shows the next 12 months as a grid and downloads it as Excel. Fractional monthly or weekly buying by index weight is also available.
 4. **Portfolio.** Shows invested amount, current value, gain, XIRR, and actual versus target allocation.
 5. **Household.** Works like MealPilot: one person starts a household and others join with an invite code and admin approval. Each member decides whether others in the household can see their portfolio.
 6. **Indian stocks and US stocks dashboards.** Built from your Tickertape stock screener exports (about 250 columns for India and 75 for the US). Rank stocks on any metrics with your own weights and directions, limit to the top N by market cap or to chosen sectors, and open any stock to see every field.
@@ -77,6 +78,20 @@ git stash pop
 npx wrangler d1 migrations apply vithai --remote   # only if migrations/ changed
 npx wrangler deploy
 ```
+
+## Backups and deleting data
+
+On the **Household** page anyone can download a full backup of their data (.json) or their purchases, plans and allocation as an Excel file. The household admin can also download a backup of the whole household.
+
+**Delete all my data** / **Delete all household data** need you to download a backup first and type DELETE. If email is set up, Vithai also emails the backup to you before deleting. To set up email (free with [Resend](https://resend.com), 3,000 emails a month):
+
+```powershell
+npx wrangler secret put RESEND_API_KEY          # paste the API key from resend.com
+# optional, once you've verified your own domain in Resend:
+npx wrangler secret put EMAIL_FROM              # e.g. Vithai <vithai@yourdomain.com>
+```
+
+Without a verified domain, Resend's test sender can only email the address you signed up to Resend with.
 
 ## Importing Tickertape data: column mapping
 
