@@ -7,7 +7,8 @@ import {
 } from './auth.js';
 import { nameKey, cleanName } from './names.js';
 
-const SLOTS = ['largecap', 'midsmall', 'debt', 'international', 'gold', 'nifty50'];
+const SLOTS = ['largecap', 'midsmall', 'debt', 'international', 'gold', 'nifty50', 'usstocks'];
+const MARKETS = ['in', 'us', 'mf']; // Tickertape datasets kept in KV
 export const DEFAULT_SETTINGS = {
   monthlyTotal: 50000,
   alloc: { largecap: 30, midsmall: 25, debt: 15, international: 20, gold: 10, nifty50: 0 },
@@ -15,6 +16,10 @@ export const DEFAULT_SETTINGS = {
   criteria: {},     // per-slot overrides of the default ranking criteria
   picks: {},        // per-slot pinned scheme code (otherwise the top-ranked fund is used)
   riskFree: 6.5,
+  usSlot: false,     // show a US stocks allocation slot
+  usdInr: null,      // rupees per US dollar, entered in Setup
+  usBasket: [],      // [{ key, name, weight }] US stocks bought in the US slot
+  stockCriteria: {}, // per-market overrides of the stock ranking criteria
 };
 
 class HttpError extends Error {
@@ -72,6 +77,9 @@ async function route(request, env, url) {
   if (p === '/api/funds' && m === 'GET') return getFunds(env);
   if (p.startsWith('/api/facts/') && m === 'PUT') return putFacts(request, env, me, decodeURIComponent(p.slice(11)));
   if (p === '/api/tickertape' && m === 'POST') return uploadTickertape(request, env, me);
+  if (p === '/api/datasets' && m === 'GET') return listDatasets(env);
+  if (p.startsWith('/api/datasets/') && m === 'GET') return getDataset(env, p.slice(14));
+  if (p.startsWith('/api/datasets/') && m === 'PUT') return putDataset(request, env, me, p.slice(14));
   if (p === '/api/nifty' && m === 'GET') return getNifty(env);
   if (p === '/api/nifty' && m === 'PUT') return putNifty(request, env, me);
   if (p === '/api/transactions' && m === 'GET') return json({ transactions: await listTx(env, me.id, url.searchParams.get('month')) });
@@ -242,6 +250,11 @@ async function putSettings(request, env, me) {
   if (b.criteria && typeof b.criteria === 'object') s.criteria = b.criteria;
   if (b.picks && typeof b.picks === 'object') s.picks = Object.fromEntries(Object.entries(b.picks).filter(([k, v]) => SLOTS.includes(k) && v).map(([k, v]) => [k, String(v)]));
   if (b.riskFree !== undefined && num(b.riskFree) !== null) s.riskFree = num(b.riskFree);
+  if (b.usSlot !== undefined) s.usSlot = !!b.usSlot;
+  if (b.usdInr !== undefined) s.usdInr = num(b.usdInr) > 0 ? num(b.usdInr) : null;
+  if (Array.isArray(b.usBasket)) s.usBasket = b.usBasket.slice(0, 100).map((x) => ({ key: str(x.key, 200), name: str(x.name, 200), weight: Math.max(0, num(x.weight) ?? 1) })).filter((x) => x.key);
+  if (b.stockCriteria && typeof b.stockCriteria === 'object') s.stockCriteria = b.stockCriteria;
+  if (!s.usSlot) s.alloc.usstocks = 0;
   const data = JSON.stringify(s);
   if (data.length > 50000) throw new HttpError(400, 'Settings too large.');
   await env.DB.prepare(
@@ -362,9 +375,46 @@ async function ingest(request, env) {
   return json({ ok: true, upserted: schemes.length, seedFacts: seed.length });
 }
 
+// ---------------------------------------------------------------- Tickertape datasets (KV)
+// Each dataset is a gzipped JSON table built in the browser from the Tickertape CSV exports.
+// The Worker only streams bytes in and out, so it stays within the free plan's CPU limit.
+function needKV(env) {
+  if (!env.DATA) throw new HttpError(501, 'Data storage is not set up yet. Create the KV namespace (see the README) and redeploy.');
+}
+
+async function listDatasets(env) {
+  needKV(env);
+  const { keys } = await env.DATA.list({ prefix: 'dataset:' });
+  const out = Object.fromEntries(MARKETS.map((m) => [m, null]));
+  for (const k of keys) out[k.name.slice(8)] = k.metadata || {};
+  return json({ datasets: out });
+}
+
+async function getDataset(env, mkt) {
+  needKV(env);
+  if (!MARKETS.includes(mkt)) throw new HttpError(404, 'Unknown dataset.');
+  const { value, metadata } = await env.DATA.getWithMetadata(`dataset:${mkt}`, { type: 'stream' });
+  if (!value) throw new HttpError(404, 'No data loaded yet. Load your Tickertape exports on the Data page.');
+  return new Response(value, { headers: { 'content-type': 'application/octet-stream', 'cache-control': 'no-store', 'x-dataset-meta': encodeURIComponent(JSON.stringify(metadata || {})) } });
+}
+
+async function putDataset(request, env, me, mkt) {
+  needKV(env);
+  if (me.role !== 'admin') throw new HttpError(403, 'Only household admins can load data.');
+  if (!MARKETS.includes(mkt)) throw new HttpError(404, 'Unknown dataset.');
+  const size = Number(request.headers.get('content-length') || 0);
+  if (size > 24 * 1024 * 1024) throw new HttpError(413, 'Dataset too large (max 24 MB compressed).');
+  const metadata = {
+    rows: num(request.headers.get('x-rows')), cols: num(request.headers.get('x-cols')),
+    files: str(decodeURIComponent(request.headers.get('x-files') || ''), 500), uploadedAt: new Date().toISOString(), by: me.name, bytes: size,
+  };
+  await env.DATA.put(`dataset:${mkt}`, request.body, { metadata });
+  return json({ ok: true, metadata });
+}
+
 // ---------------------------------------------------------------- Nifty 50
 async function getNifty(env) {
-  const { results } = await env.DB.prepare('SELECT symbol, weight, ltp, updated_at FROM nifty50 ORDER BY weight DESC').all();
+  const { results } = await env.DB.prepare('SELECT symbol, name, weight, ltp, updated_at FROM nifty50 ORDER BY weight DESC').all();
   return json({ stocks: results });
 }
 
@@ -419,7 +469,7 @@ async function addTx(request, env, me) {
   const id = randomId();
   await env.DB.prepare(
     'INSERT INTO transactions (id, user_id, trade_date, month, slot, asset_id, asset_name, units, price, amount, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-  ).bind(id, me.id, tradeDate, month, slot, str(b.assetId, 40), str(b.assetName, 200) || str(b.assetId, 40), units, price, amount, str(b.note, 300) || null).run();
+  ).bind(id, me.id, tradeDate, month, slot, str(b.assetId, 300), str(b.assetName, 200) || str(b.assetId, 300), units, price, amount, str(b.note, 300) || null).run();
   return json({ ok: true, id });
 }
 

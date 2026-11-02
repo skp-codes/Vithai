@@ -33,6 +33,7 @@ export const SLOTS = {
   international: { label: 'International', short: 'International', kind: 'mf' },
   gold: { label: 'Gold', short: 'Gold', kind: 'etf' },
   nifty50: { label: 'Nifty 50 stocks', short: 'Nifty 50', kind: 'stocks' },
+  usstocks: { label: 'US stocks', short: 'US stocks', kind: 'us' },
 };
 
 // Default criteria — the same factors used for the October/November recommendations:
@@ -74,21 +75,28 @@ function percentiles(values, dir) {
 }
 
 /**
- * @param {Array<object>} funds rows with metric fields
- * @param {Array<[string, number]>} criteria [[metricKey, weight], ...]
- * @returns rows (new objects) with score (0-100), rank, coverage, sorted best first
+ * Generic ranking. criteria = [[key, weight, dir]] where dir is 'asc' (lower is better) or 'desc'.
+ * Returns new row objects with score (0-100), coverage (share of criteria weight with data) and rank.
  */
-export function rankFunds(funds, criteria) {
-  const active = criteria.filter(([k, w]) => METRICS[k] && w > 0);
-  const pcts = active.map(([k]) => percentiles(funds.map(f => f[k]), METRICS[k].dir));
+export function rankRows(rows, criteria) {
+  const active = criteria.filter(([, w]) => w > 0);
+  const pcts = active.map(([k, , dir]) => percentiles(rows.map((f) => f[k]), dir || 'desc'));
   const totalW = active.reduce((s, [, w]) => s + w, 0);
-  const rows = funds.map((f, i) => {
+  const out = rows.map((f, i) => {
     let s = 0, w = 0;
     active.forEach(([, wt], j) => { const p = pcts[j].get(i); if (p !== undefined) { s += p * wt; w += wt; } });
     return { ...f, score: w ? Math.round((s / w) * 1000) / 10 : null, coverage: totalW ? w / totalW : 0 };
   });
-  // Funds missing more than half the criteria weight rank below those with fuller data
-  rows.sort((a, b) => (b.coverage >= 0.5) - (a.coverage >= 0.5) || (b.score ?? -1) - (a.score ?? -1));
-  rows.forEach((r, i) => { r.rank = i + 1; });
-  return rows;
+  // Rows missing more than half the criteria weight rank below those with fuller data
+  out.sort((a, b) => (b.coverage >= 0.5) - (a.coverage >= 0.5) || (b.score ?? -1) - (a.score ?? -1));
+  out.forEach((r, i) => { r.rank = i + 1; });
+  return out;
+}
+
+/**
+ * @param {Array<object>} funds rows with metric fields
+ * @param {Array<[string, number]>} criteria [[metricKey, weight], ...]
+ */
+export function rankFunds(funds, criteria) {
+  return rankRows(funds, criteria.filter(([k]) => METRICS[k]).map(([k, w]) => [k, w, METRICS[k].dir]));
 }

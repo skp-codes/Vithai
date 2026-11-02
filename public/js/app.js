@@ -1,6 +1,8 @@
 // Vithai front-end: a small single-page app with hash routes.
-import { api, esc, inr, num, pct, signCls, today, thisMonth, monthLabel, toast, openModal, xirr, waitForXLSX } from './util.js';
+import { api, esc, inr, num, pct, signCls, today, thisMonth, monthLabel, toast, openModal, xirr, waitForXLSX } from './util.js'; // eslint-disable-line no-unused-vars
 import { METRICS, SLOTS, DEFAULT_CRITERIA, rankFunds } from './ranking.js';
+import { renderStocks, usPriceLookup } from './stocks.js';
+import { KINDS, readExport, mergeParts, toDataset, uploadDataset, loadDataset, clearDatasetCache, mfFactsRows, niftyPricesFrom, saveMfFacts } from './tickertape.js';
 
 const S = { me: null, settings: null, funds: [], meta: {}, nifty: [], route: 'setup', fundsTab: 'largecap', loaded: false };
 const app = document.getElementById('app');
@@ -13,9 +15,12 @@ const ICONS = {
   funds: '<path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-6"/>',
   plan: '<rect x="3" y="4" width="18" height="17" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
   portfolio: '<path d="M21 12a9 9 0 11-9-9v9h9z"/><path d="M21 12A9 9 0 0012 3"/>',
+  'stocks-in': '<path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/>',
+  'stocks-us': '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 010 18M12 3a14 14 0 000 18"/>',
+  data: '<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>',
   household: '<path d="M3 11l9-7 9 7v9a1 1 0 01-1 1h-5v-6H9v6H4a1 1 0 01-1-1z"/>',
 };
-const ROUTES = [['setup', 'Setup'], ['funds', 'Fund dashboard'], ['plan', 'Monthly plan'], ['portfolio', 'Portfolio'], ['household', 'Household']];
+const ROUTES = [['setup', 'Setup'], ['funds', 'Fund dashboard'], ['stocks-in', 'Indian stocks'], ['stocks-us', 'US stocks'], ['plan', 'Monthly plan'], ['portfolio', 'Portfolio'], ['data', 'Data'], ['household', 'Household']];
 
 // ---------------------------------------------------------------- boot & routing
 async function boot() {
@@ -62,7 +67,8 @@ function renderShell() {
     <main id="main"></main></div>`;
   document.getElementById('logout').onclick = async () => { await api('POST', '/api/auth/logout'); location.hash = ''; location.reload(); };
   const main = document.getElementById('main');
-  ({ setup: renderSetup, funds: renderFunds, plan: renderPlan, portfolio: renderPortfolio, household: renderHousehold })[S.route](main);
+  const ctx = { S, saveSettings };
+  ({ setup: renderSetup, funds: renderFunds, 'stocks-in': (m) => renderStocks(m, 'in', ctx), 'stocks-us': (m) => renderStocks(m, 'us', ctx), plan: renderPlan, portfolio: renderPortfolio, data: renderData, household: renderHousehold })[S.route](main);
   if (S.me.mustChangePassword) promptPasswordChange(true);
 }
 
@@ -101,10 +107,11 @@ async function saveSettings(patch, msg = 'Saved') {
 function renderSetup(main) {
   const s = S.settings;
   const amcs = [...new Set(S.funds.map((f) => f.amc))].sort();
-  const rows = Object.keys(SLOTS).map((k) => {
-    const c = k === 'nifty50' ? null : chosenFund(k);
+  const rows = Object.keys(SLOTS).filter((k) => k !== 'usstocks' || s.usSlot).map((k) => {
+    const c = k === 'nifty50' || k === 'usstocks' ? null : chosenFund(k);
     const pick = k === 'nifty50'
       ? `<span class="muted">${S.nifty.length} stocks by index weight</span>`
+      : k === 'usstocks' ? `<span class="muted">${(s.usBasket || []).length} stocks in your US basket</span> <a href="#/stocks-us">edit</a>`
       : c.fund ? `${esc(c.fund.name)} ${c.pinned ? '<span class="badge">pinned</span>' : '<span class="badge good">top ranked</span>'}` : '<span class="warn">No data yet</span>';
     return `<tr><td><b>${SLOTS[k].label}</b></td>
       <td class="r"><input class="input num alloc" data-slot="${k}" type="number" min="0" max="100" step="1" value="${s.alloc[k] ?? 0}" style="width:80px"></td>
@@ -126,6 +133,12 @@ function renderSetup(main) {
       <h3>Fund houses to exclude</h3><p class="sub">Funds from these AMCs never appear in your rankings or plan.</p>
       <div id="exl"></div>
       <div class="row" style="max-width:520px;margin-top:8px"><div><select class="input" id="amcsel"><option value="">Add a fund house…</option>${amcs.map((a) => `<option>${esc(a)}</option>`).join('')}</select></div></div>
+    </div>
+    <div class="card">
+      <h3>US stocks slot</h3><p class="sub">Optional. When on, a US stocks line joins the allocation above, invested across the basket you build on the US stocks dashboard.</p>
+      <label class="toggle"><input type="checkbox" id="usslot" ${s.usSlot ? 'checked' : ''}>Include a US stocks slot in my allocation</label>
+      <div class="row" style="max-width:420px;margin-top:12px"><div><label class="f" for="usdinr">Rupees per US dollar (₹)</label><input class="input num" id="usdinr" type="number" min="0" step="0.01" value="${s.usdInr ?? ''}" placeholder="e.g. today's rate"></div></div>
+      <p class="note">Used to convert the slot's rupee amount into dollars and to value your US holdings. Update it when the rate moves.</p>
     </div>
     <div class="row" style="max-width:420px"><button class="btn primary" id="savesetup">Save setup</button></div>`;
 
@@ -153,12 +166,15 @@ function renderSetup(main) {
   };
   main.querySelectorAll('input').forEach((i) => (i.oninput = recalc));
   recalc();
+  document.getElementById('usslot').onchange = async (e) => {
+    try { await saveSettings({ usSlot: e.target.checked, usdInr: Number(document.getElementById('usdinr').value) || null }, e.target.checked ? 'US stocks slot added. Give it a percentage below.' : 'US stocks slot removed'); renderSetup(main); } catch (err) { toast(err.message); }
+  };
   document.getElementById('savesetup').onclick = async () => {
     if (recalc() !== 100) return toast('Make the percentages add up to 100 first.');
     const alloc = {};
     document.querySelectorAll('.alloc').forEach((i) => (alloc[i.dataset.slot] = Number(i.value) || 0));
     try {
-      await saveSettings({ monthlyTotal: Number(document.getElementById('total').value) || 0, alloc, excludedAmcs: excluded }, 'Setup saved');
+      await saveSettings({ monthlyTotal: Number(document.getElementById('total').value) || 0, alloc, excludedAmcs: excluded, usdInr: Number(document.getElementById('usdinr').value) || null }, 'Setup saved');
       renderSetup(main);
     } catch (e) { toast(e.message); }
   };
@@ -178,7 +194,7 @@ function renderFunds(main) {
 
   main.innerHTML = `
     <div class="page-head"><div><h2>Fund dashboard</h2><p>NAV data refreshed ${esc(lastRefresh)} · ${esc(ttInfo)}</p></div><div class="grow"></div>
-      ${isAdmin ? '<label class="btn"><input type="file" id="ttfile" accept=".xlsx,.xls,.csv" hidden>Upload Tickertape export</label>' : ''}</div>
+      ${isAdmin ? '<a class="btn" href="#/data">Load Tickertape data</a>' : ''}</div>
     <div class="seg" id="slottabs" style="margin-bottom:16px">${FUND_SLOTS.map((k) => `<button data-k="${k}" class="${k === slot ? 'on' : ''}">${SLOTS[k].label}</button>`).join('')}</div>
     ${!S.funds.length ? `<div class="card"><h3>No fund data yet</h3><p class="sub">Run the "Refresh fund data" GitHub Action once (see the README). Data then refreshes twice a day on its own.</p></div>` : ''}
     <div class="funds-layout">
@@ -197,7 +213,6 @@ function renderFunds(main) {
   main.querySelectorAll('#slottabs button').forEach((b) => (b.onclick = () => { S.fundsTab = b.dataset.k; fundSort = { key: 'rank', dir: 1 }; renderFunds(main); }));
   document.getElementById('unpin')?.addEventListener('click', async () => { const picks = { ...S.settings.picks }; delete picks[slot]; await saveSettings({ picks }, 'Now using the top-ranked fund'); renderFunds(main); });
   document.getElementById('fsearch').oninput = (e) => { fundSearch = e.target.value; drawTable(); };
-  document.getElementById('ttfile')?.addEventListener('change', (e) => uploadTickertape(e.target.files[0], main));
   drawCriteria();
   drawTable();
 
@@ -322,40 +337,6 @@ function fundDetail(code, main) {
   });
 }
 
-// Tickertape screener export → compact rows (base Growth plans only)
-async function uploadTickertape(file, main) {
-  if (!file) return;
-  try {
-    const XLSX = await waitForXLSX();
-    const wb = XLSX.read(new Uint8Array(await file.arrayBuffer()), { type: 'array' });
-    const sheet = wb.Sheets[wb.SheetNames.find((n) => /overall/i.test(n)) || wb.SheetNames[0]];
-    const data = XLSX.utils.sheet_to_json(sheet, { defval: null });
-    const pick = (r, ...names) => { for (const n of names) { const k = Object.keys(r).find((x) => x.trim().toLowerCase() === n.toLowerCase()); if (k && r[k] !== null && r[k] !== '') return r[k]; } return null; };
-    const pos = (v) => (typeof v === 'number' && v > 0 ? v : null); // Tickertape uses 0 for "missing"
-    const rows = [];
-    for (const r of data) {
-      const name = pick(r, 'Name');
-      if (!name || /\(/.test(String(name))) continue; // skip IDCW / payout variants
-      rows.push({
-        name: String(name), sub: pick(r, 'Sub Category'),
-        facts: {
-          expenseRatio: pos(pick(r, 'Expense Ratio', 'Total Exp. Ratio', 'Total Expense Ratio')), aum: pos(pick(r, 'AUM')), exitLoad: typeof pick(r, 'Exit Load') === 'number' ? pick(r, 'Exit Load') : null,
-          alpha: pick(r, 'Alpha'), peRatio: pos(pick(r, 'PE Ratio')), ytm: pos(pick(r, 'Average YTM')),
-          risk: pick(r, 'SEBI Risk Category'), benchmark: pick(r, 'Benchmark'), fundManager: pick(r, 'Fund Manager'),
-          minSip: pick(r, 'Minimum SIP'), largecapPct: pick(r, '% Largecap Holding'), midcapPct: pick(r, '% Midcap Holding'),
-          smallcapPct: pick(r, '% Smallcap Holding'), top10Pct: pick(r, '% Concentration - Top 10 Holdings'), cashPct: pick(r, '% Cash Holding'),
-        },
-      });
-    }
-    if (!rows.length) throw new Error('No fund rows found. Is this the Tickertape mutual fund screener export?');
-    const res = await api('POST', '/api/tickertape', { rows });
-    const f = await api('GET', '/api/funds');
-    S.funds = f.funds.map(flattenFacts); S.meta = f.meta || {};
-    toast(`Uploaded ${res.rows} funds; ${res.matched} of ${res.totalSchemes} Vithai funds matched by name.`);
-    renderFunds(main);
-  } catch (e) { toast(e.message); }
-}
-
 // ---------------------------------------------------------------- MONTHLY PLAN
 let planMonth = thisMonth();
 async function renderPlan(main) {
@@ -373,6 +354,20 @@ async function renderPlan(main) {
   const niftyAmt = s.monthlyTotal * (s.alloc.nifty50 || 0) / 100;
   const wSum = S.nifty.reduce((a, x) => a + x.weight, 0) || 1;
   const totalDone = sum(transactions, 'amount');
+  const usAmt = s.usSlot ? s.monthlyTotal * (s.alloc.usstocks || 0) / 100 : 0;
+  let usLines = [];
+  if (usAmt > 0) {
+    let usDs = null;
+    try { usDs = await loadDataset('us'); } catch { /* no US data yet */ }
+    const priceOf = usPriceLookup(usDs);
+    const basket = s.usBasket || [];
+    const wTot = basket.reduce((a, x) => a + (x.weight || 0), 0) || 1;
+    usLines = basket.map((x) => {
+      const inrAmt = usAmt * (x.weight || 0) / wTot;
+      const usd = priceOf(x.key);
+      return { ...x, inrAmt, usd, qty: usd && s.usdInr ? inrAmt / s.usdInr / usd : null, done: bought('usstocks', x.key) };
+    });
+  }
 
   main.innerHTML = `
     <div class="page-head"><div><h2>Monthly plan</h2><p>What to buy this month, and a record of what you actually bought.</p></div><div class="grow"></div>
@@ -394,6 +389,10 @@ async function renderPlan(main) {
       <div class="tablewrap" style="margin-top:12px;max-height:60vh"><table class="t"><thead><tr><th>Symbol</th><th class="r">Weight</th><th class="r">Amount</th><th class="r">Price</th><th class="r">Qty</th><th class="r">Recorded</th><th></th></tr></thead>
       <tbody>${S.nifty.map((x) => { const a = niftyAmt * x.weight / wSum; const d = bought('nifty50', x.symbol); return `<tr><td><b>${esc(x.symbol)}</b></td><td class="r">${pct(x.weight)}</td><td class="r">${inr(a, 2)}</td><td class="r">${num(x.ltp, 2)}</td><td class="r">${x.ltp ? num(a / x.ltp, 4) : '–'}</td><td class="r">${d.length ? num(sum(d, 'units'), 4) : '–'}</td><td><button class="btn small" data-recn="${esc(x.symbol)}">Record</button></td></tr>`; }).join('')}</tbody></table></div>
       <p class="note">Prices last updated ${esc((S.nifty[0]?.updated_at || '').slice(0, 10) || '–')}.</p></div>` : ''}
+    ${usAmt > 0 ? `<div class="card"><h3>US stocks · ${inr(usAmt)}${s.usdInr ? ` <span class="muted">(about $${num(usAmt / s.usdInr, 2)} at ₹${num(s.usdInr, 2)})</span>` : ''}</h3>
+      <p class="sub">Split across your US basket by weight. ${s.usdInr ? '' : '<span class="warn">Enter the rupee–dollar rate in Setup to see quantities.</span>'} Edit the basket on the <a href="#/stocks-us">US stocks</a> page.</p>
+      <div class="tablewrap"><table class="t"><thead><tr><th>Stock</th><th class="r">Weight</th><th class="r">Amount (₹)</th><th class="r">Price ($)</th><th class="r">Qty</th><th class="r">Recorded</th><th></th></tr></thead>
+      <tbody>${usLines.map((x, i) => `<tr><td class="nm">${esc(x.name)}</td><td class="r"><input class="w input num" data-usw="${i}" type="number" min="0" step="1" value="${x.weight}" style="width:70px;padding:3px 6px"></td><td class="r">${inr(x.inrAmt, 2)}</td><td class="r">${num(x.usd, 2)}</td><td class="r">${x.qty ? num(x.qty, 4) : '–'}</td><td class="r">${x.done.length ? num(sum(x.done, 'units'), 4) : '–'}</td><td><button class="btn small" data-recu="${i}">Record</button></td></tr>`).join('') || '<tr><td colspan="7" class="muted">Your US basket is empty. Add stocks on the US stocks page.</td></tr>'}</tbody></table></div></div>` : ''}
     <div class="card"><h3>Recorded in ${esc(monthLabel(planMonth))}</h3>
       <div class="tablewrap"><table class="t"><thead><tr><th>Date</th><th>Slot</th><th>Asset</th><th class="r">Units</th><th class="r">Price</th><th class="r">Amount</th><th></th></tr></thead>
       <tbody>${transactions.map((t) => `<tr><td>${esc(t.tradeDate)}</td><td>${SLOTS[t.slot]?.short || t.slot}</td><td class="nm">${esc(t.assetName)}</td><td class="r">${num(t.units, 4)}</td><td class="r">${num(t.price, 4)}</td><td class="r">${inr(t.amount, 2)}</td><td><button class="btn small danger" data-del="${t.id}">Delete</button></td></tr>`).join('') || '<tr><td colspan="7" class="muted">Nothing recorded yet this month.</td></tr>'}</tbody></table></div></div>`;
@@ -424,6 +423,14 @@ async function renderPlan(main) {
     } catch (e) { toast(e.message); }
   });
   document.getElementById('niftyupd')?.addEventListener('click', () => niftyModal(() => renderPlan(main)));
+  main.querySelectorAll('[data-usw]').forEach((inp) => (inp.onchange = async () => {
+    const basket = (S.settings.usBasket || []).map((x, i) => (i === +inp.dataset.usw ? { ...x, weight: Number(inp.value) || 0 } : x));
+    await saveSettings({ usBasket: basket }, 'Basket weights saved'); renderPlan(main);
+  }));
+  main.querySelectorAll('[data-recu]').forEach((b) => (b.onclick = () => {
+    const x = usLines[+b.dataset.recu];
+    recordModal({ slot: 'usstocks', assetId: x.key, assetName: x.name, price: x.usd && s.usdInr ? +(x.usd * s.usdInr).toFixed(2) : '', units: x.qty ? +x.qty.toFixed(4) : '', priceLabel: 'Price paid per share (₹, i.e. $ price × rate)' }, () => renderPlan(main));
+  }));
 }
 
 function recordModal(pre, done) {
@@ -432,7 +439,7 @@ function recordModal(pre, done) {
       <div class="row"><div><label class="f">Date bought</label><input class="input" name="tradeDate" type="date" value="${today()}" required></div>
       <div><label class="f">Counts towards month</label><input class="input" name="month" type="month" value="${planMonth}"></div></div>
       <div class="row"><div><label class="f">Units / quantity</label><input class="input num" name="units" type="number" step="any" min="0" value="${pre.units}" required></div>
-      <div><label class="f">${pre.slot === 'nifty50' ? 'Price' : 'NAV'} paid</label><input class="input num" name="price" type="number" step="any" min="0" value="${pre.price ?? ''}" required></div></div>
+      <div><label class="f">${pre.priceLabel || (pre.slot === 'nifty50' ? 'Price' : 'NAV') + ' paid'}</label><input class="input num" name="price" type="number" step="any" min="0" value="${pre.price ?? ''}" required></div></div>
       <div class="row"><div><label class="f">Total amount (₹)</label><input class="input num" name="amount" type="number" step="any" min="0"></div>
       <div><label class="f">Note (optional)</label><input class="input" name="note"></div></div>
       <p class="note">Leave the amount blank to use units × price. Check the actual units on your Coin / Kite contract note.</p>
@@ -498,7 +505,15 @@ async function renderPortfolio(main) {
   let data;
   try { data = await api('GET', `/api/members/${portfolioMember}/portfolio`); } catch (e) { main.innerHTML = `<div class="card">${esc(e.message)}</div>`; return; }
   const tx = data.transactions, set = data.settings;
-  const priceOf = (t) => (t.slot === 'nifty50' ? S.nifty.find((n) => n.symbol === t.assetId)?.ltp : S.funds.find((f) => f.code === t.assetId)?.nav) ?? null;
+  let usPrice = () => null;
+  if (tx.some((t) => t.slot === 'usstocks')) { try { usPrice = usPriceLookup(await loadDataset('us')); } catch { /* valued at cost */ } }
+  const rate = set.usdInr || S.settings.usdInr;
+  const priceOf = (h) => {
+    const id = h.assetId ?? h.id;
+    if (h.slot === 'nifty50') return S.nifty.find((n) => n.symbol === id)?.ltp ?? null;
+    if (h.slot === 'usstocks') { const p = usPrice(id); return p && rate ? p * rate : null; }
+    return S.funds.find((f) => f.code === id)?.nav ?? null;
+  };
   const hold = new Map();
   for (const t of tx) {
     const h = hold.get(t.assetId) || { slot: t.slot, id: t.assetId, name: t.assetName, units: 0, invested: 0, first: t.tradeDate };
@@ -511,7 +526,7 @@ async function renderPortfolio(main) {
   const flows = tx.map((t) => ({ date: t.tradeDate, amount: -t.amount })).sort((a, b) => a.date.localeCompare(b.date));
   if (flows.length) flows.push({ date: today(), amount: value });
   const irr = xirr(flows);
-  const bySlot = Object.keys(SLOTS).map((k) => {
+  const bySlot = Object.keys(SLOTS).filter((k) => k !== 'usstocks' || set.usSlot || holdings.some((h) => h.slot === k)).map((k) => {
     const v = holdings.filter((h) => h.slot === k).reduce((a, h) => a + h.value, 0);
     return { k, v, actual: value ? v / value * 100 : 0, target: set.alloc[k] || 0 };
   });
@@ -540,8 +555,95 @@ async function renderPortfolio(main) {
       <div class="tablewrap"><table class="t"><thead><tr><th>Slot</th><th>Holding</th><th class="r">Units</th><th class="r">Avg cost</th><th class="r">Invested</th><th class="r">Price now</th><th class="r">Value</th><th class="r">Gain</th><th class="r">Gain %</th></tr></thead>
       <tbody>${holdings.sort((a, b) => b.value - a.value).map((h) => `<tr><td>${SLOTS[h.slot]?.short || h.slot}</td><td class="nm">${esc(h.name)}</td><td class="r">${num(h.units, 4)}</td><td class="r">${num(h.invested / h.units, 2)}</td><td class="r">${inr(h.invested)}</td><td class="r">${h.priced ? num(h.price, 2) : '<span class="warn" title="No current price; valued at cost">–</span>'}</td><td class="r">${inr(h.value)}</td><td class="r ${signCls(h.value - h.invested)}">${inr(h.value - h.invested)}</td><td class="r ${signCls(h.value - h.invested)}">${pct((h.value - h.invested) / h.invested * 100)}</td></tr>`).join('') || '<tr><td colspan="9" class="muted">Record purchases on the Monthly plan page to see them here.</td></tr>'}</tbody>
       ${holdings.length ? `<tfoot><tr><td colspan="4">Total</td><td class="r">${inr(invested)}</td><td></td><td class="r">${inr(value)}</td><td class="r ${signCls(gain)}">${inr(gain)}</td><td class="r ${signCls(gain)}">${invested ? pct(gain / invested * 100) : '–'}</td></tr></tfoot>` : ''}</table></div>
-      <p class="note">Mutual funds and ETFs are valued at the latest NAV from AMFI; Nifty 50 stocks at the prices last updated on the Monthly plan page.</p></div>`;
+      <p class="note">Mutual funds and ETFs are valued at the latest NAV from AMFI; Nifty 50 stocks at the prices last updated; US stocks at the last Tickertape price × your rupee–dollar rate.</p></div>`;
   document.getElementById('pmem')?.addEventListener('change', (e) => { portfolioMember = e.target.value; renderPortfolio(main); });
+}
+
+// ---------------------------------------------------------------- DATA (Tickertape)
+async function renderData(main) {
+  const admin = S.me.role === 'admin';
+  let ds = {};
+  let dsError = '';
+  try { ds = (await api('GET', '/api/datasets')).datasets; } catch (e) { dsError = e.message; }
+  const when = (m) => (m?.uploadedAt ? new Date(m.uploadedAt).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' }) : null);
+  const status = (k) => {
+    const m = ds[k];
+    return `<tr><td><b>${KINDS[k]}</b></td><td>${m ? esc(when(m)) : '<span class="warn">Not loaded</span>'}</td><td class="r">${m ? num(m.rows, 0) : '–'}</td><td class="r">${m ? num(m.cols, 0) : '–'}</td><td class="nm">${m ? esc(m.files || '') : ''}</td></tr>`;
+  };
+  main.innerHTML = `
+    <div class="page-head"><div><h2>Data</h2><p>Load your Tickertape screener exports for mutual funds, Indian stocks and US stocks.</p></div></div>
+    <div class="card"><h3>What's loaded</h3>${dsError ? `<p class="err">${esc(dsError)}</p>` : ''}
+      <div class="tablewrap"><table class="t"><thead><tr><th>Dataset</th><th>Loaded</th><th class="r">Rows</th><th class="r">Columns</th><th>Files</th></tr></thead>
+      <tbody>${['mf', 'in', 'us'].map(status).join('')}</tbody></table></div>
+      <p class="note">Fund NAVs, returns and risk ratios refresh automatically twice a day. Tickertape data only changes when you load new exports.</p></div>
+    <div class="card"><h3>1 · Export from Tickertape</h3>
+      <p class="sub">Tickertape exports at most 45 columns at a time, so the <b>Vithai export</b> button splits every available column into parts and exports each one using Tickertape's own Export button, in your signed-in browser.</p>
+      <ol style="padding-left:18px;margin:0 0 12px">
+        <li>Show your bookmarks bar (<b>Ctrl+Shift+B</b>) and <b>drag this button onto it</b>: <a class="btn primary" id="bm" href="#" onclick="return false" title="Drag me to your bookmarks bar">⬇ Vithai export</a></li>
+        <li>Sign in to Tickertape, then open a screener: <a href="https://www.tickertape.in/screener/mutual-fund" target="_blank" rel="noopener">Mutual funds</a> · <a href="https://www.tickertape.in/screener/equity" target="_blank" rel="noopener">Indian stocks</a> · <a href="https://www.tickertape.in/screener/us-stocks" target="_blank" rel="noopener">US stocks</a></li>
+        <li>Click <b>Vithai export</b> in your bookmarks bar and leave the tab alone until the box in the bottom-right says it's finished (about 1–3 minutes).</li>
+        <li>The first time, Chrome asks to allow <b>multiple downloads</b> from Tickertape. Choose <b>Allow</b>.</li>
+      </ol>
+      <p class="note">If you're signed out of Tickertape the export stops and tells you. If Tickertape changes its page, the button may need updating.</p></div>
+    <div class="card"><h3>2 · Load the files into Vithai</h3>
+      ${admin ? `<p class="sub">Select all the CSV files at once: every part, for any of the three screeners. Vithai works out which is which and joins the parts back together.</p>
+      <label class="btn primary"><input type="file" id="ttfiles" accept=".csv,.xlsx,.xls" multiple hidden>Choose files…</label>
+      <div id="ttprev" style="margin-top:14px"></div>` : '<p class="sub">Only a household admin can load data.</p>'}</div>`;
+
+  // bookmarklet
+  try {
+    const code = await (await fetch('/tools/tickertape-export.js', { cache: 'no-store' })).text();
+    document.getElementById('bm').href = 'javascript:' + encodeURIComponent(code);
+  } catch { /* leave as # */ }
+
+  let files = [];
+  const drawPreview = () => {
+    const box = document.getElementById('ttprev');
+    if (!files.length) { box.innerHTML = ''; return; }
+    box.innerHTML = `<div class="tablewrap"><table class="t"><thead><tr><th>File</th><th>Type</th><th class="r">Rows</th><th class="r">Columns</th></tr></thead>
+      <tbody>${files.map((f, i) => `<tr><td class="nm">${esc(f.name)}</td><td><select class="input" data-i="${i}" style="width:auto;padding:4px 8px">${Object.entries(KINDS).map(([k, l]) => `<option value="${k}" ${f.guess === k ? 'selected' : ''}>${l}</option>`).join('')}</select></td><td class="r">${num(f.rows.length, 0)}</td><td class="r">${f.header.length}</td></tr>`).join('')}</tbody></table></div>
+      <div class="row" style="margin-top:12px"><button class="btn primary" id="ttload" style="flex:0 0 auto">Load into Vithai</button><span class="note" id="ttmsg"></span></div>`;
+    box.querySelectorAll('select[data-i]').forEach((sel) => (sel.onchange = () => { files[+sel.dataset.i].guess = sel.value; }));
+    document.getElementById('ttload').onclick = loadAll;
+  };
+  document.getElementById('ttfiles')?.addEventListener('change', async (e) => {
+    const msg = document.getElementById('ttprev');
+    msg.innerHTML = '<p class="note">Reading files…</p>';
+    try { files = await Promise.all([...e.target.files].map(readExport)); drawPreview(); } catch (err) { msg.innerHTML = `<p class="err">${esc(err.message)}</p>`; }
+  });
+
+  async function loadAll() {
+    const btn = document.getElementById('ttload'), msg = document.getElementById('ttmsg');
+    btn.disabled = true;
+    const done = [];
+    try {
+      for (const kind of ['mf', 'in', 'us']) {
+        const group = files.filter((f) => f.guess === kind);
+        if (!group.length) continue;
+        msg.textContent = `Merging and uploading ${KINDS[kind]}…`;
+        const merged = mergeParts(group);
+        const dataset = toDataset(kind, merged, group.map((f) => f.name));
+        await uploadDataset(dataset);
+        clearDatasetCache(kind);
+        let extra = '';
+        if (kind === 'mf') {
+          const r = await saveMfFacts(mfFactsRows(merged));
+          extra = `, ${r.matched} matched to Vithai's funds`;
+        }
+        if (kind === 'in') {
+          const prices = niftyPricesFrom(merged, S.nifty);
+          if (prices.length) { const r = await api('PUT', '/api/nifty', { rows: prices }); S.nifty = r.stocks; }
+          extra = `, Nifty 50 prices updated for ${prices.length} of ${S.nifty.length} stocks`;
+        }
+        done.push(`${KINDS[kind]}: ${num(merged.rows.length, 0)} rows × ${merged.columns.length} columns${extra}`);
+      }
+      const f = await api('GET', '/api/funds');
+      S.funds = f.funds.map(flattenFacts); S.meta = f.meta || {};
+      toast('Tickertape data loaded');
+      renderData(main);
+      setTimeout(() => openModal(`<h3>Data loaded</h3><ul>${done.map((d) => `<li>${esc(d)}</li>`).join('')}</ul><div class="row" style="justify-content:flex-end"><button class="btn primary" data-close>Done</button></div>`), 50);
+    } catch (e) { msg.textContent = e.message; btn.disabled = false; }
+  }
 }
 
 // ---------------------------------------------------------------- HOUSEHOLD

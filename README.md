@@ -9,6 +9,9 @@ Vithai is a household investment planner for Indian mutual funds, gold ETFs and 
 3. **Monthly plan.** Shows how much to put into each fund, estimated units, and the Nifty 50 basket by index weight in fractional quantities. You record the units you actually bought.
 4. **Portfolio.** Shows invested amount, current value, gain, XIRR, and actual versus target allocation.
 5. **Household.** Works like MealPilot: one person starts a household and others join with an invite code and admin approval. Each member decides whether others in the household can see their portfolio.
+6. **Indian stocks and US stocks dashboards.** Built from your Tickertape stock screener exports (about 250 columns for India and 75 for the US). Rank stocks on any metrics with your own weights and directions, limit to the top N by market cap or to chosen sectors, and open any stock to see every field.
+7. **Optional US stocks slot.** Turn it on in Setup, set the rupee–dollar rate, and add stocks to your US basket from the US dashboard. The monthly plan splits the slot across the basket, and the portfolio values the holdings in rupees.
+8. **Data page.** A **Vithai export** bookmark exports *every* column from each Tickertape screener. Tickertape caps each export at 45 columns, so the bookmark makes several files. Drop all the files on the Data page and Vithai joins them back together.
 
 ## How the data works
 
@@ -18,6 +21,7 @@ Vithai is a household investment planner for Indian mutual funds, gold ETFs and 
 | Expense ratio, AUM, exit load (key funds and all major gold ETFs) | Researched values in `data/seed-facts.json` | When updated in the repo |
 | Expense ratio, AUM, exit load, alpha, PE, YTM, holdings mix (everything else) | Your **Tickertape screener export**, uploaded on the Fund dashboard | Whenever you upload, about monthly |
 | Overrides (expense ratio, subscription status such as "closed to new SIPs") | Edited in the app by a household admin | Any time |
+| Indian and US stock data | Tickertape stock screener exports, loaded on the Data page; stored compressed in Cloudflare KV | Whenever you load new exports |
 | Nifty 50 weights and prices | Seeded on 2 Nov 2026; update on the Monthly plan page by pasting from NSE | Before you buy |
 
 Priority when values clash: **edited in app > researched > Tickertape**. Tickertape exports don't separate Direct and Regular plans and use 0 for missing values, so they only fill gaps.
@@ -44,23 +48,41 @@ npx wrangler login
 # 1. Create the database, then paste the printed database_id into wrangler.toml
 npx wrangler d1 create vithai
 
-# 2. Create the tables and seed the Nifty 50 list
+# 2. Create the store for Tickertape data, then paste the printed id into wrangler.toml (kv_namespaces)
+npx wrangler kv namespace create DATA
+
+# 3. Create the tables and seed the Nifty 50 list
 npx wrangler d1 migrations apply vithai --remote
 
-# 3. Set the secret the data refresh uses (any long random string; keep a copy for step 5)
+# 4. Set the secret the data refresh uses (any long random string; keep a copy for step 5)
 npx wrangler secret put INGEST_TOKEN
 
-# 4. Deploy. This prints your https://vithai.<you>.workers.dev address
+# 5. Deploy. This prints your https://vithai.<you>.workers.dev address
 npx wrangler deploy
 ```
 
-5. **Add the data refresh secrets on GitHub.** In the repo, go to **Settings → Secrets and variables → Actions → New repository secret** and add:
+6. **Add the data refresh secrets on GitHub.** In the repo, go to **Settings → Secrets and variables → Actions → New repository secret** and add:
    - `VITHAI_URL`: your site address from step 4, e.g. `https://vithai.<you>.workers.dev`
    - `INGEST_TOKEN`: the same value as in step 3
-6. **Load data now.** Under **Actions → Refresh fund data → Run workflow**. It takes about 3–5 minutes. After that it runs on its own twice a day.
-7. Open the site, choose **Start a household**, and you're the admin.
+7. **Load fund data now.** Under **Actions → Refresh fund data → Run workflow**. It takes about 3–5 minutes. After that it runs on its own twice a day.
+8. Open the site, choose **Start a household**, and you're the admin.
+9. On the **Data** page, drag **Vithai export** to your bookmarks bar, run it on each Tickertape screener, and load the downloaded files.
 
-**Updating later:** after pulling changes, run `npx wrangler d1 migrations apply vithai --remote` (only if `migrations/` changed) and `npx wrangler deploy`.
+**Updating later:** `wrangler.toml` holds your own database and KV ids, so keep your edits when pulling:
+
+```powershell
+git stash
+git pull
+git stash pop
+npx wrangler d1 migrations apply vithai --remote   # only if migrations/ changed
+npx wrangler deploy
+```
+
+## Tickertape export bookmark
+
+`public/tools/tickertape-export.js` runs in your own signed-in Chrome on a Tickertape screener page. It reads the full filter list, splits it into parts of at most 45 columns (Tickertape's export limit), and for each part ticks those filters and clicks Tickertape's own **Export** button. Files are named `vithai-<mf|in|us>-<date>-partNofM.csv`. The first time, Chrome asks to allow multiple downloads from tickertape.in; choose Allow. If Tickertape changes its page layout, this script is the one place to update.
+
+Tickertape's terms prohibit reproducing the (S&P-licensed) data without permission, so keep Vithai private to your household; don't make it public or commercial with this data in it.
 
 ### Custom domain
 

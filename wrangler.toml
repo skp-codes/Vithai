@@ -15,6 +15,11 @@ database_name = "vithai"
 database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"   # printed by: npx wrangler d1 create vithai
 migrations_dir = "migrations"
 
+# Stores the Tickertape datasets (create with: npx wrangler kv namespace create DATA)
+[[kv_namespaces]]
+binding = "DATA"
+id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+
 [vars]
 # Lower this (e.g. 50000) only if sign-in hits Workers' free-plan CPU limit
 PBKDF2_ITERATIONS = "100000"
