@@ -339,7 +339,7 @@ async function uploadTickertape(file, main) {
       rows.push({
         name: String(name), sub: pick(r, 'Sub Category'),
         facts: {
-          expenseRatio: pos(pick(r, 'Expense Ratio')), aum: pos(pick(r, 'AUM')), exitLoad: typeof pick(r, 'Exit Load') === 'number' ? pick(r, 'Exit Load') : null,
+          expenseRatio: pos(pick(r, 'Expense Ratio', 'Total Exp. Ratio', 'Total Expense Ratio')), aum: pos(pick(r, 'AUM')), exitLoad: typeof pick(r, 'Exit Load') === 'number' ? pick(r, 'Exit Load') : null,
           alpha: pick(r, 'Alpha'), peRatio: pos(pick(r, 'PE Ratio')), ytm: pos(pick(r, 'Average YTM')),
           risk: pick(r, 'SEBI Risk Category'), benchmark: pick(r, 'Benchmark'), fundManager: pick(r, 'Fund Manager'),
           minSip: pick(r, 'Minimum SIP'), largecapPct: pick(r, '% Largecap Holding'), midcapPct: pick(r, '% Midcap Holding'),
