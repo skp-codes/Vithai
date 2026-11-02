@@ -483,12 +483,33 @@ async function renderData(main) {
     <div class="card"><h3>1 · Export from Tickertape</h3>
       <p class="sub">Tickertape exports at most 45 columns at a time, so the <b>Vithai export</b> button splits every available column into parts and exports each one using Tickertape's own Export button, in your signed-in browser.</p>
       <ol style="padding-left:18px;margin:0 0 12px">
-        <li>Show your bookmarks bar (<b>Ctrl+Shift+B</b>) and <b>drag this button onto it</b>: <a class="btn primary" id="bm" href="#" onclick="return false" title="Drag me to your bookmarks bar">⬇ Vithai export</a></li>
+        <li>Show your bookmarks bar (<b>Ctrl+Shift+B</b>, or <b>Cmd+Shift+B</b> on a Mac) and <b>drag this button onto it</b>: <a class="btn primary" id="bm" href="#" onclick="return false" title="Drag me to your bookmarks bar">⬇ Vithai export</a>
+          <span class="note" style="display:block;margin-top:4px">The shortcut and dragging work in desktop Chrome or Edge only, not on a phone or tablet. Can't drag it? Use <b>Copy script</b> below.</span></li>
         <li>Sign in to Tickertape, then open a screener: <a href="https://www.tickertape.in/screener/mutual-fund" target="_blank" rel="noopener">Mutual funds</a> · <a href="https://www.tickertape.in/screener/equity" target="_blank" rel="noopener">Indian stocks</a> · <a href="https://www.tickertape.in/screener/us-stocks" target="_blank" rel="noopener">US stocks</a></li>
         <li>Click <b>Vithai export</b> in your bookmarks bar and leave the tab alone until the box in the bottom-right says it's finished (about 1–3 minutes).</li>
         <li>The first time, Chrome asks to allow <b>multiple downloads</b> from Tickertape. Choose <b>Allow</b>.</li>
       </ol>
-      <p class="note">If you're signed out of Tickertape the export stops and tells you. If Tickertape changes its page, the button may need updating.</p></div>
+      <p class="note">If you're signed out of Tickertape the export stops and tells you. If Tickertape changes its page, the button may need updating.</p>
+      <details style="margin-top:12px"><summary style="cursor:pointer;font-weight:600">Can't drag the button? Add it by hand with Copy script</summary>
+        <div class="row tight" style="margin:10px 0;flex-wrap:wrap;align-items:center"><button class="btn" id="bmcopy">Copy script</button><span class="note" id="bmcopied"></span></div>
+        <textarea class="input" id="bmcode" rows="3" readonly style="font-family:var(--mono);font-size:11px" placeholder="Loading script…"></textarea>
+        <p style="margin:12px 0 4px"><b>Desktop Chrome or Edge</b></p>
+        <ol style="padding-left:18px;margin:0">
+          <li>Click <b>Copy script</b>.</li>
+          <li>Right-click the bookmarks bar → <b>Add page…</b> (Edge: <b>Add favourite</b>). Name it <b>Vithai export</b>.</li>
+          <li>Paste the script into the <b>URL</b> box and save. Then use it as in steps 2–4 above.</li></ol>
+        <p style="margin:12px 0 4px"><b>Android (Chrome)</b></p>
+        <ol style="padding-left:18px;margin:0">
+          <li>Click <b>Copy script</b>. Bookmark any page (⋮ → ☆), then ⋮ → <b>Bookmarks</b>, find that bookmark, ⋮ → <b>Edit</b>.</li>
+          <li>Change the name to <b>Vithai export</b>, replace the URL with the copied script, and save.</li>
+          <li>On a Tickertape screener, tap the address bar, type <b>Vithai export</b> and tap the bookmark in the suggestions (opening it from the Bookmarks list doesn't run it).</li></ol>
+        <p style="margin:12px 0 4px"><b>iPhone / iPad (Safari)</b></p>
+        <ol style="padding-left:18px;margin:0">
+          <li>Click <b>Copy script</b>. Bookmark any page (Share → <b>Add Bookmark</b>).</li>
+          <li>Open Bookmarks, tap <b>Edit</b>, tap the new bookmark, rename it <b>Vithai export</b> and replace the address with the copied script.</li>
+          <li>On a Tickertape screener, open Bookmarks and tap <b>Vithai export</b>.</li></ol>
+        <p class="note" style="margin-top:10px"><b>On phones it's best-effort:</b> the script was built for Tickertape's desktop page. Tickertape's mobile layout is different, and phones often block or rename multiple downloads. If it doesn't work, export from a computer about once a month. Everyone in your household can still use Vithai on their phones, because the loaded data is stored for the household.</p>
+      </details></div>
     <div class="card"><h3>2 · Load the files into Vithai</h3>
       ${admin ? `<p class="sub">Select all the CSV files at once: every part, for any of the three screeners. Vithai works out which is which and joins the parts back together.</p>
       <label class="btn primary"><input type="file" id="ttfiles" accept=".csv,.xlsx,.xls" multiple hidden>Choose files…</label>
@@ -497,7 +518,16 @@ async function renderData(main) {
   // bookmarklet
   try {
     const code = await (await fetch('/tools/tickertape-export.js', { cache: 'no-store' })).text();
-    document.getElementById('bm').href = 'javascript:' + encodeURIComponent(code);
+    const bmUrl = 'javascript:' + encodeURIComponent(code);
+    document.getElementById('bm').href = bmUrl;
+    const ta = document.getElementById('bmcode');
+    ta.value = bmUrl;
+    document.getElementById('bmcopy').onclick = async () => {
+      let ok = false;
+      try { await navigator.clipboard.writeText(bmUrl); ok = true; } catch { /* fall back below */ }
+      if (!ok) { ta.focus(); ta.select(); try { ok = document.execCommand('copy'); } catch { ok = false; } }
+      document.getElementById('bmcopied').textContent = ok ? '✓ Copied. Now paste it as a bookmark\'s URL.' : 'Couldn\'t copy automatically: select all the text in the box and copy it.';
+    };
   } catch { /* leave as # */ }
 
   let files = [];
