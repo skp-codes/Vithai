@@ -68,7 +68,7 @@ CREATE TABLE IF NOT EXISTS schemes (
 CREATE INDEX IF NOT EXISTS idx_schemes_slot ON schemes(slot);
 
 -- Facts that can't be derived from NAVs: expense ratio, AUM, exit load, subscription status.
--- Monthly Tickertape uploads live in meta('tickertape'); priority is seed < tickertape < manual.
+-- Monthly Tickertape uploads live in meta('tickertape'); priority is tickertape < seed < manual.
 CREATE TABLE IF NOT EXISTS fund_facts (
   code TEXT NOT NULL,
   source TEXT NOT NULL,              -- 'seed' (researched) | 'manual' (typed in the app)
