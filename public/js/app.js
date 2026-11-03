@@ -673,7 +673,7 @@ async function renderHousehold(main) {
     <div class="grid2">
       <div class="card"><h3>Your dashboard sharing</h3><p class="sub">When on, other approved members of your household can see your portfolio. Your setup and purchases stay yours either way.</p>
         <label class="toggle"><input type="checkbox" id="share" ${S.me.shareDashboard ? 'checked' : ''}>Share my portfolio with my household</label></div>
-      ${admin ? `<div class="card"><h3>Invite someone</h3><p class="sub">They choose "Join a household" when signing up and enter this code. You then approve them below.</p>
+      ${admin ? `<div class="card"><h3>Invite someone</h3><p class="sub">They choose "Join a household" when signing up and enter this code or the household name, <b>${esc(household.name)}</b>. You then approve them below.</p>
         <div class="row"><div><input class="input" readonly value="${esc(household.inviteCode)}" style="font-family:var(--mono);font-size:18px;letter-spacing:.15em"></div><button class="btn" id="copycode" style="flex:0 0 auto">Copy</button></div></div>` : ''}
     </div>
     <div class="card"><h3>Members</h3>
@@ -851,7 +851,7 @@ function renderAuth() {
         <div><label class="f">Email <span class="muted">(optional)</span></label><input class="input" name="email" type="email" autocomplete="email"><p class="note" style="margin:4px 0 0">You can sign in with it too, and it's where backups are emailed. You can add it later.</p></div>`}
         <div><label class="f">Password${mode !== 'login' ? ' (8+ characters)' : ''}</label><input class="input" name="password" type="password" minlength="${mode === 'login' ? 1 : 8}" autocomplete="${mode === 'login' ? 'current-password' : 'new-password'}" required></div>
         ${mode === 'create' ? '<div><label class="f">Household name</label><input class="input" name="householdName" placeholder="e.g. The Kumar family"><p class="note" style="margin:4px 0 0">New households are approved by the site admin before you can start.</p></div>' : ''}
-        ${mode === 'join' ? '<div><label class="f">Invite code</label><input class="input" name="inviteCode" required style="text-transform:uppercase;font-family:var(--mono);letter-spacing:.12em"></div>' : ''}
+        ${mode === 'join' ? '<div><label class="f">Household name or invite code</label><input class="input" name="join" required autocapitalize="none" placeholder="e.g. SKP-Home or K7Q2XM"><p class="note" style="margin:4px 0 0">Ask your household admin for either. They approve your request before you can start.</p></div>' : ''}
         <button class="btn primary">${mode === 'login' ? 'Sign in' : mode === 'create' ? 'Request a new household' : 'Request to join'}</button>
         <div id="aerr" class="err" role="alert"></div>
       </form></div></div>`;

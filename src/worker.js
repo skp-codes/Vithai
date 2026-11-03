@@ -169,20 +169,25 @@ async function register(request, env) {
   let siteAdminSignup = false;
   if (isReserved(env, username, email)) {
     const taken = await env.DB.prepare('SELECT 1 FROM users WHERE username = ? OR email = ?').bind(lc(env.SITE_ADMIN_USERNAME), lc(env.SITE_ADMIN_EMAIL) || '-').first();
-    if (taken || !env.SITE_ADMIN_EMAIL || email !== lc(env.SITE_ADMIN_EMAIL) || str(b.inviteCode)) throw new HttpError(409, 'That username or email is reserved. Choose another.');
+    if (taken || !env.SITE_ADMIN_EMAIL || email !== lc(env.SITE_ADMIN_EMAIL) || str(b.join) || str(b.inviteCode)) throw new HttpError(409, 'That username or email is reserved. Choose another.');
     siteAdminSignup = true;
   }
   if (password.length < 8) throw new HttpError(400, 'Use a password of at least 8 characters.');
 
   const { hash, salt } = await hashPassword(password, Number(env.PBKDF2_ITERATIONS) || undefined);
   const id = randomId();
-  let householdId, role, status, hname = null;
-  if (str(b.inviteCode)) {
-    const h = await env.DB.prepare("SELECT id FROM households WHERE invite_code = ? AND status = 'active'").bind(str(b.inviteCode).toUpperCase()).first();
-    if (!h) throw new HttpError(404, 'That invite code was not found. Check it with your household admin.');
+  let householdId, role, status, hname = null, joinedName = null;
+  const join = str(b.join, 60) || str(b.inviteCode, 60); // household name or invite code
+  if (join) {
+    // An invite code first, then a household name (names are unique, ignoring case)
+    const h = await env.DB.prepare("SELECT id, name FROM households WHERE invite_code = ? AND status = 'active'").bind(join.toUpperCase()).first()
+      || await env.DB.prepare("SELECT id, name FROM households WHERE lower(name) = ? AND status = 'active'").bind(join.toLowerCase()).first();
+    if (!h) throw new HttpError(404, 'No household with that name or invite code. Check the spelling with your household admin.');
     householdId = h.id; role = 'member'; status = 'pending';
+    joinedName = h.name;
   } else {
     hname = str(b.householdName, 60) || `${name}'s household`;
+    if (await env.DB.prepare("SELECT 1 FROM households WHERE lower(name) = ? AND status != 'rejected'").bind(hname.toLowerCase()).first()) throw new HttpError(409, `There's already a household called "${hname}". Choose a different name, or join it instead.`);
     householdId = randomId();
     // New households wait for the site admin
     await env.DB.prepare('INSERT INTO households (id, name, invite_code, status) VALUES (?, ?, ?, ?)').bind(householdId, hname, inviteCode(), siteAdminSignup ? 'active' : 'pending').run();
@@ -191,6 +196,10 @@ async function register(request, env) {
   await env.DB.prepare(
     'INSERT INTO users (id, username, email, name, pass_hash, pass_salt, household_id, role, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
   ).bind(id, username, email || `nomail:${id}`, name, hash, salt, householdId, role, status).run();
+  if (joinedName) {
+    const { results: admins } = await env.DB.prepare("SELECT email FROM users WHERE household_id = ? AND role = 'admin' AND status = 'active'").bind(householdId).all();
+    for (const a of admins) await notify(env, realEmail(a.email), `Vithai: ${name} wants to join "${joinedName}"`, `${name} (username ${username}) asked to join your household "${joinedName}".\n\nSign in to Vithai and open Household to approve or reject the request.`);
+  }
   if (hname && !siteAdminSignup) await notify(env, env.SITE_ADMIN_EMAIL, `Vithai: new household "${hname}" waiting for approval`,
     `${name} (username ${username}${email ? `, ${email}` : ''}) started the household "${hname}".\n\nSign in to Vithai and open Site admin to approve or reject it.`);
   const cookie = await startSession(env, id);
