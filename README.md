@@ -69,12 +69,12 @@ npx wrangler secret put SITE_ADMIN_PASSWORD
 npx wrangler deploy
 ```
 
-6. **Add the data refresh secrets on GitHub.** In the repo, go to **Settings → Secrets and variables → Actions → New repository secret** and add:
-   - `VITHAI_URL`: your site address from step 4, e.g. `https://vithai.<you>.workers.dev`
-   - `INGEST_TOKEN`: the same value as in step 3
-7. **Load fund data now.** Under **Actions → Refresh fund data → Run workflow**. It takes about 3–5 minutes. After that it runs on its own twice a day.
-8. Open the site and sign in as the site admin (`skp1980`, or your site admin email). Other people choose **Start a household** and wait for you to approve them under **Site admin**; you get an email about each one once email is set up.
-9. On the **Data** page, drag **Vithai export** to your bookmarks bar, run it on each Tickertape screener, and load the downloaded files.
+7. **Add the data refresh secrets on GitHub.** In the repo, go to **Settings → Secrets and variables → Actions → New repository secret** and add:
+   - `VITHAI_URL`: your site address from step 6, e.g. `https://vithai.<you>.workers.dev`
+   - `INGEST_TOKEN`: the same value as in step 4
+8. **Load fund data now.** Under **Actions → Refresh fund data → Run workflow**. It takes about 3–5 minutes. After that it runs on its own twice a day.
+9. Open the site and sign in as the site admin (`skp1980`, or your site admin email). Other people choose **Start a household** and wait for you to approve them under **Site admin**; you get an email about each one once email is set up.
+10. On the **Data** page, drag **Vithai export** to your bookmarks bar, run it on each Tickertape screener, and load the downloaded files.
 
 **Updating later:** `wrangler.toml` holds your own database and KV ids, so keep your edits when pulling:
 
