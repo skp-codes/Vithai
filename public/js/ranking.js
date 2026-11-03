@@ -97,6 +97,8 @@ export function rankRows(rows, criteria) {
  * @param {Array<object>} funds rows with metric fields
  * @param {Array<[string, number]>} criteria [[metricKey, weight], ...]
  */
-export function rankFunds(funds, criteria) {
-  return rankRows(funds, criteria.filter(([k]) => METRICS[k]).map(([k, w]) => [k, w, METRICS[k].dir]));
+export function rankFunds(funds, criteria, extra = {}) {
+  const all = { ...METRICS, ...extra };
+  // A criterion is [key, weight] or [key, weight, direction]; the direction overrides the metric's default
+  return rankRows(funds, criteria.filter(([k]) => all[k]).map(([k, w, d]) => [k, w, d || all[k].dir]));
 }

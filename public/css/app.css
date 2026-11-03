@@ -128,9 +128,12 @@ table.t td.nm { white-space: normal; min-width: 220px; max-width: 340px; }
 .funds-layout { display: grid; grid-template-columns: 290px 1fr; gap: 18px; align-items: start; }
 .criteria { position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow: auto; }
 .crit-group { font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); margin: 14px 0 6px; font-weight: 700; }
-.crit { display: grid; grid-template-columns: 18px 1fr 54px; align-items: center; gap: 8px; padding: 4px 0; font-size: 12.5px; }
+.crit { display: grid; grid-template-columns: 18px 1fr auto 54px; align-items: center; gap: 8px; padding: 4px 0; font-size: 12.5px; }
 .crit input[type=checkbox] { accent-color: var(--accent); }
 .crit input.w { width: 54px; padding: 3px 5px; border: 1px solid var(--line); border-radius: 6px; font-family: var(--mono); font-size: 12px; text-align: right; background: var(--canvas); }
+.dirbtn { font-family: var(--mono); font-size: 10px; color: var(--muted); background: none; border: 1px solid var(--line); border-radius: 5px; padding: 2px 5px; cursor: pointer; white-space: nowrap; }
+.dirbtn:hover { color: var(--ink, inherit); border-color: var(--accent); }
+.crit label { overflow-wrap: anywhere; }
 .crit .dir { font-family: var(--mono); font-size: 10px; color: var(--muted); margin-left: 4px; }
 .toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
 .search { min-width: 220px; max-width: 320px; }

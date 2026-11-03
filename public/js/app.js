@@ -3,6 +3,8 @@ import { api, esc, inr, num, pct, signCls, today, thisMonth, monthLabel, toast, 
 import { METRICS, SLOTS, DEFAULT_CRITERIA, rankFunds } from './ranking.js';
 import { renderStocks, usPriceLookup } from './stocks.js'; // eslint-disable-line no-unused-vars
 import { renderPlan } from './plan.js';
+import { nameKey, cleanName } from './names.js';
+import { guessDir } from './stocks.js';
 import { KINDS, readExport, mergeParts, toDataset, uploadDataset, loadDataset, clearDatasetCache, mfFactsRows, niftyPricesFrom, saveMfFacts, autoMap, keyFieldsFor, defaultLabel, getColumnMap, saveColumnMap } from './tickertape.js';
 
 const S = { me: null, settings: null, funds: [], meta: {}, nifty: [], route: 'setup', fundsTab: 'largecap', loaded: false };
@@ -59,8 +61,44 @@ async function loadData() {
   S.funds = f.funds.map(flattenFacts);
   S.meta = f.meta || {};
   S.nifty = n.stocks;
+  await attachTickertape();
   S.loaded = true;
 }
+
+// Every numeric column of the household's Tickertape mutual fund export becomes a metric you can rank on.
+// Keys look like "tt:<column name>"; rows are matched to funds by name, as on the server.
+let TT_METRICS = {};
+async function attachTickertape(force = false) {
+  TT_METRICS = {};
+  let ds;
+  try { ds = await loadDataset('mf', force); } catch { return; } // nothing loaded yet
+  const nameCol = ds.keys?.name;
+  if (!nameCol) return;
+  const skip = new Set(Object.values(ds.keys || {}).filter((l) => l === nameCol));
+  const numCols = ds.columns.filter((c) => c.type === 'num' && !skip.has(c.label)).map((c) => c.label);
+  for (const c of numCols) TT_METRICS[`tt:${c}`] = { label: c, dir: guessDir(c), group: 'Tickertape', tt: true };
+  const byName = new Map();
+  for (const o of ds.objects) {
+    const n = o[nameCol];
+    if (!n || /\(/.test(String(n))) continue; // IDCW / payout variants
+    byName.set(nameKey(n), o);
+  }
+  let matched = 0;
+  for (const f of S.funds) {
+    const o = byName.get(nameKey(cleanName(f.name)));
+    f.tt = o || null;
+    if (o) matched++;
+    for (const c of numCols) {
+      let v = o ? o[c] : null;
+      v = typeof v === 'number' && isFinite(v) ? v : null;
+      // Tickertape writes 0 for "no data"; where lower is better, a 0 would wrongly win, so treat it as missing
+      if (v === 0 && TT_METRICS[`tt:${c}`].dir === 'asc') v = null;
+      f[`tt:${c}`] = v;
+    }
+  }
+  S.ttMatched = matched;
+}
+const metricOf = (k) => METRICS[k] || TT_METRICS[k];
 
 function flattenFacts(f) {
   const out = { ...f };
@@ -107,7 +145,7 @@ function eligibleFunds(slot, cfg = slotConfig(slot)) {
     && !(cfg.hideClosed && /closed|paused|suspend/i.test(f.facts?.status || '')));
 }
 
-function rankedFor(slot) { const cfg = slotConfig(slot); return rankFunds(eligibleFunds(slot, cfg), cfg.criteria); }
+function rankedFor(slot) { const cfg = slotConfig(slot); return rankFunds(eligibleFunds(slot, cfg), cfg.criteria, TT_METRICS); }
 
 function chosenFund(slot) {
   const pin = S.settings.picks?.[slot];
@@ -222,6 +260,7 @@ function renderSetup(main) {
 // ---------------------------------------------------------------- FUND DASHBOARD
 let fundSort = { key: 'rank', dir: 1 };
 let fundSearch = '';
+let ttQuery = '';
 function renderFunds(main) {
   const slot = S.fundsTab;
   const cfg = slotConfig(slot);
@@ -257,38 +296,65 @@ function renderFunds(main) {
 
   function drawCriteria() {
     const panel = document.getElementById('critpanel');
-    const active = new Map(cfg.criteria);
+    const active = new Map(cfg.criteria.map(([k, w]) => [k, w]));
+    const dirOf = new Map(cfg.criteria.map(([k, , d]) => [k, d || metricOf(k)?.dir || 'desc']));
     const groups = {};
     for (const [k, m] of Object.entries(METRICS)) (groups[m.group] ||= []).push(k);
+    const ttKeys = Object.keys(TT_METRICS);
     const subs = SUB_OPTIONS[slot];
     const pool = eligibleFunds(slot, cfg);
     const cover = (k) => pool.length ? pool.filter((f) => typeof f[k] === 'number').length / pool.length : 0;
     const coverNote = (k) => `<div class="note" style="margin:-2px 0 4px 26px">${cover(k) === 0 ? '<span class="warn">no data for these funds: not scoring</span>' : `${Math.round(cover(k) * 100)}% of funds have it`}</div>`;
-    const noData = [...active.keys()].filter((k) => METRICS[k] && cover(k) === 0);
-    panel.innerHTML = `<h3>Ranking criteria</h3><p class="sub">Tick the metrics to score on and set their weight. Each fund's score is the weighted average of its percentile on each metric; funds missing a metric are scored on the rest.</p>
+    const noData = [...active.keys()].filter((k) => metricOf(k) && cover(k) === 0);
+    const gone = [...active.keys()].filter((k) => !metricOf(k));
+    const line = (k) => { const m = metricOf(k); const d = dirOf.get(k) || m.dir; return `
+        <div class="crit" data-row="${esc(k)}"><input type="checkbox" data-k="${esc(k)}" ${active.has(k) ? 'checked' : ''} id="c_${esc(k)}">
+        <label for="c_${esc(k)}">${esc(m.label)}</label><button type="button" class="dirbtn" data-dir="${esc(k)}" data-d="${d}" title="Click to flip: is a higher or lower value better?">${d === 'asc' ? '↓ better' : '↑ better'}</button>
+        <input class="w" type="number" min="0" step="0.5" data-w="${esc(k)}" value="${active.get(k) ?? 1}" aria-label="Weight for ${esc(m.label)}"></div>${active.has(k) ? coverNote(k) : ''}`; };
+    const ttSorted = [...ttKeys.filter((k) => active.has(k)), ...ttKeys.filter((k) => !active.has(k))];
+    panel.innerHTML = `<h3>Ranking criteria</h3><p class="sub">Tick the metrics to score on, set their weight, and click ↑/↓ to say whether higher or lower is better. Each fund's score is the weighted average of its percentile on each metric; funds missing a metric are scored on the rest.</p>
       <div class="row"><div><label class="f">Minimum age (years)</label><input class="input num" id="minage" type="number" min="0" step="1" value="${cfg.minAge}"></div></div>
       ${subs ? `<div class="crit-group">Include</div>${subs.map((s) => `<label class="toggle" style="margin-right:14px"><input type="checkbox" class="subchk" value="${s}" ${cfg.sub.includes(s) ? 'checked' : ''}>${s}</label>`).join('')}` : ''}
       <div style="margin-top:10px"><label class="toggle"><input type="checkbox" id="hideclosed" ${cfg.hideClosed ? 'checked' : ''}>Hide funds marked closed to new SIPs</label></div>
-      ${Object.entries(groups).map(([g, keys]) => `<div class="crit-group">${g}</div>${keys.map((k) => `
-        <div class="crit"><input type="checkbox" data-k="${k}" ${active.has(k) ? 'checked' : ''} id="c_${k}">
-        <label for="c_${k}">${METRICS[k].label}<span class="dir">${METRICS[k].dir === 'asc' ? '↓ better' : '↑ better'}</span></label>
-        <input class="w" type="number" min="0" step="0.5" data-w="${k}" value="${active.get(k) ?? 1}" aria-label="Weight for ${METRICS[k].label}"></div>${active.has(k) ? coverNote(k) : ''}`).join('')}`).join('')}
-      ${noData.length ? `<p class="note warn" style="margin-top:10px">${noData.length} ticked metric${noData.length > 1 ? 's have' : ' has'} no data for these funds (${noData.map((k) => METRICS[k].label).join(', ')}) and ${noData.length > 1 ? 'are' : 'is'} not scoring. <button class="btn small" id="dropempty">Untick them</button></p>` : ''}
+      ${Object.entries(groups).map(([g, keys]) => `<div class="crit-group">${g}</div>${keys.map(line).join('')}`).join('')}
+      <div class="crit-group">From your Tickertape data (${ttKeys.length} column${ttKeys.length === 1 ? '' : 's'}${ttKeys.length ? `, ${S.ttMatched || 0} funds matched` : ''})</div>
+      ${ttKeys.length ? `<input class="input" id="ttq" placeholder="Search ${ttKeys.length} columns…" style="margin:4px 0 6px;padding:5px 8px;font-size:13px" value="${esc(ttQuery)}">
+        <div id="ttlist" style="max-height:340px;overflow:auto">${ttSorted.map(line).join('')}</div>
+        <p class="note">Every number column in the mutual fund export. Where lower is better, a 0 is treated as "no data" because Tickertape writes 0 for missing values.</p>`
+        : `<p class="note">Load your Tickertape mutual fund export on the <a href="#/data">Data</a> page to rank on any of its columns too.</p>`}
+      ${gone.length ? `<p class="note warn" style="margin-top:10px">${gone.length} saved metric${gone.length > 1 ? 's are' : ' is'} not in your current data (${gone.map((k) => esc(k.replace(/^tt:/, ''))).join(', ')}) and left out. <button class="btn small" id="dropgone">Remove</button></p>` : ''}
+      ${noData.length ? `<p class="note warn" style="margin-top:10px">${noData.length} ticked metric${noData.length > 1 ? 's have' : ' has'} no data for these funds (${noData.map((k) => esc(metricOf(k).label)).join(', ')}) and ${noData.length > 1 ? 'are' : 'is'} not scoring. <button class="btn small" id="dropempty">Untick them</button></p>` : ''}
       <div class="row" style="margin-top:14px"><button class="btn primary" id="savecrit">Save criteria</button><button class="btn" id="resetcrit">Reset to Vithai default</button></div>`;
+    const filterTT = () => {
+      const q = (document.getElementById('ttq')?.value || '').toLowerCase();
+      panel.querySelectorAll('#ttlist .crit').forEach((r) => { const k = r.dataset.row; const show = !q || active.has(k) || TT_METRICS[k].label.toLowerCase().includes(q); r.style.display = show ? '' : 'none'; if (r.nextElementSibling?.classList.contains('note')) r.nextElementSibling.style.display = show ? '' : 'none'; });
+    };
+    filterTT();
     const collect = () => {
       const criteria = [];
-      panel.querySelectorAll('input[type=checkbox][data-k]').forEach((c) => { if (c.checked) criteria.push([c.dataset.k, Number(panel.querySelector(`[data-w="${c.dataset.k}"]`).value) || 0]); });
+      panel.querySelectorAll('input[type=checkbox][data-k]').forEach((c) => {
+        if (!c.checked) return;
+        const k = c.dataset.k, d = panel.querySelector(`[data-dir="${CSS.escape(k)}"]`).dataset.d;
+        const w = Number(panel.querySelector(`[data-w="${CSS.escape(k)}"]`).value) || 0;
+        criteria.push(d !== metricOf(k).dir ? [k, w, d] : [k, w]);
+      });
+      for (const k of gone) criteria.push(cfg.criteria.find(([x]) => x === k)); // keep until removed
       const sub = subs ? [...panel.querySelectorAll('.subchk:checked')].map((c) => c.value) : [];
       return { minAge: Number(document.getElementById('minage').value) || 0, sub, criteria, hideClosed: document.getElementById('hideclosed').checked };
     };
-    panel.querySelectorAll('input').forEach((i) => (i.onchange = () => { Object.assign(cfg, collect()); drawCriteria(); drawTable(true); }));
+    const refresh = () => { Object.assign(cfg, collect()); drawCriteria(); drawTable(true); };
+    panel.querySelectorAll('input:not(#ttq)').forEach((i) => (i.onchange = refresh));
+    panel.querySelectorAll('.dirbtn').forEach((b) => (b.onclick = () => { b.dataset.d = b.dataset.d === 'asc' ? 'desc' : 'asc'; refresh(); }));
+    const tq = document.getElementById('ttq');
+    if (tq) tq.oninput = () => { ttQuery = tq.value; filterTT(); };
     document.getElementById('dropempty')?.addEventListener('click', () => { cfg.criteria = cfg.criteria.filter(([k]) => !noData.includes(k)); drawCriteria(); drawTable(true); });
+    document.getElementById('dropgone')?.addEventListener('click', () => { cfg.criteria = cfg.criteria.filter(([k]) => !gone.includes(k)); drawCriteria(); drawTable(true); });
     document.getElementById('savecrit').onclick = async () => { await saveSettings({ criteria: { ...S.settings.criteria, [slot]: collect() } }, 'Criteria saved'); renderFunds(main); };
     document.getElementById('resetcrit').onclick = async () => { const c = { ...S.settings.criteria }; delete c[slot]; await saveSettings({ criteria: c }, 'Back to the Vithai default'); renderFunds(main); };
   }
 
   function drawTable(fromCriteria) {
-    const rows = fromCriteria ? rankFunds(eligibleFunds(slot, cfg), cfg.criteria) : ranked;
+    const rows = fromCriteria ? rankFunds(eligibleFunds(slot, cfg), cfg.criteria, TT_METRICS) : ranked;
     const q = fundSearch.toLowerCase();
     let list = rows.filter((f) => !q || f.name.toLowerCase().includes(q) || f.amc.toLowerCase().includes(q));
     if (fundSort.key !== 'rank') list = [...list].sort((a, b) => ((a[fundSort.key] ?? -Infinity) > (b[fundSort.key] ?? -Infinity) ? 1 : -1) * fundSort.dir);
@@ -299,6 +365,7 @@ function renderFunds(main) {
       ['ret1y', '1Y %', 'r'], ['cagr3', '3Y %', 'r'], ['cagr5', '5Y %', 'r'], ['cagr10', '10Y %', 'r'], ['rolling3Avg', '3Y roll %', 'r'],
       ['sharpe', 'Sharpe', 'r'], ['sortino', 'Sortino', 'r'], ['maxDrawdown', 'Max DD %', 'r'], ['volatility', 'Vol %', 'r'],
       ['expenseRatio', 'Exp %', 'r'], ['aum', 'AUM ₹Cr', 'r'], ['ageYears', 'Age', 'r'], ['nav', 'NAV', 'r'],
+      ...cfg.criteria.filter(([k]) => TT_METRICS[k]).map(([k]) => [k, TT_METRICS[k].label, 'r']),
     ];
     const cell = (f, k) => {
       if (k === 'rank') return `<span class="rank">${f.rank}</span>`;
@@ -316,7 +383,7 @@ function renderFunds(main) {
         <td><button class="btn small" data-pick="${f.code}">${f.code === S.settings.picks?.[slot] ? 'Pinned' : 'Use'}</button></td></tr>`).join('') || `<tr><td colspan="${cols.length + 1}" class="muted">No funds match.</td></tr>`}</tbody>`;
     t.querySelectorAll('th.sortable').forEach((th) => (th.onclick = () => {
       const k = th.dataset.k;
-      fundSort = fundSort.key === k ? { key: k, dir: -fundSort.dir } : { key: k, dir: k === 'rank' || k === 'name' || METRICS[k]?.dir === 'asc' ? 1 : -1 };
+      fundSort = fundSort.key === k ? { key: k, dir: -fundSort.dir } : { key: k, dir: k === 'rank' || k === 'name' || metricOf(k)?.dir === 'asc' ? 1 : -1 };
       drawTable(fromCriteria);
     }));
     t.querySelectorAll('[data-pick]').forEach((b) => (b.onclick = async (e) => {
@@ -359,6 +426,8 @@ function fundDetail(code, main) {
         ${extra.map(([k, v]) => m(esc(k), esc(typeof v === 'number' ? num(v, 2) : v))).join('')}
       </div>
     </div>
+    ${f.tt ? `<details style="margin-top:16px"><summary style="cursor:pointer;font-weight:600">All Tickertape data for this fund (${Object.keys(f.tt).filter((k) => k !== '__key').length} fields)</summary>
+      <div class="kv" style="margin-top:8px;max-height:300px;overflow:auto">${Object.entries(f.tt).filter(([k]) => k !== '__key').map(([k, v]) => m(esc(k), v === null || v === undefined || v === '' ? '–' : esc(typeof v === 'number' ? num(v, 2) : v))).join('')}</div></details>` : ''}
     ${S.me.role === 'admin' ? `<h3 style="margin-top:20px">Edit fund facts</h3><p class="note">Your values override the researched and Tickertape values.</p>
     <form id="factform" class="grid2" style="gap:10px">
       <div><label class="f">Expense ratio %</label><input class="input num" name="expenseRatio" type="number" step="0.01" value="${f.facts?.sources?.expenseRatio === 'manual' ? f.expenseRatio : ''}"></div>
@@ -376,6 +445,7 @@ function fundDetail(code, main) {
         await api('PUT', `/api/facts/${encodeURIComponent(code)}`, data);
         const f2 = await api('GET', '/api/funds');
         S.funds = f2.funds.map(flattenFacts);
+        await attachTickertape();
         close(); toast('Fund facts saved'); renderFunds(main);
       } catch (e) { toast(e.message); }
     });
@@ -657,6 +727,7 @@ async function renderData(main) {
       }
       const f = await api('GET', '/api/funds');
       S.funds = f.funds.map(flattenFacts); S.meta = f.meta || {};
+      await attachTickertape(true);
       toast('Tickertape data loaded');
       renderData(main);
       setTimeout(() => openModal(`<h3>Data loaded</h3><ul>${done.map((d) => `<li>${esc(d)}</li>`).join('')}</ul><div class="row" style="justify-content:flex-end"><button class="btn primary" data-close>Done</button></div>`), 50);
