@@ -23,5 +23,8 @@ id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
 [vars]
 # Lower this (e.g. 50000) only if sign-in hits Workers' free-plan CPU limit
 PBKDF2_ITERATIONS = "100000"
+# The site admin approves every new household. Their email is a secret (not published here):
+#   npx wrangler secret put SITE_ADMIN_EMAIL
+SITE_ADMIN_USERNAME = "skp1980"
 
 # Secret (set with: npx wrangler secret put INGEST_TOKEN) — shared with the GitHub Action

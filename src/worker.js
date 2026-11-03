@@ -68,9 +68,12 @@ async function route(request, env, url) {
   // signed in
   const me = await currentUser(request, env);
   if (!me) throw new HttpError(401, 'Please sign in.');
-  if (p === '/api/me' && m === 'GET') return json({ user: publicUser(me) });
+  if (p === '/api/me' && m === 'GET') return json({ user: publicUser(me, env) });
   if (p === '/api/me/password' && m === 'POST') return changePassword(request, env, me);
+  if (p === '/api/me/account' && m === 'PUT') return updateAccount(request, env, me);
+  if (me.household_status !== 'active') throw new HttpError(403, me.household_status === 'pending' ? 'Your household is waiting for the site admin to approve it.' : 'This household is not active. Contact the site admin.');
   if (me.status !== 'active') throw new HttpError(403, 'Your account is waiting for the household admin to approve it.');
+  if (p.startsWith('/api/site/')) return siteAdminRoute(request, env, me, p.slice(10), m);
 
   if (p === '/api/me/sharing' && m === 'PUT') return setSharing(request, env, me);
   if (p === '/api/settings' && m === 'GET') return json({ settings: await getSettings(env, me.id) });
@@ -102,9 +105,25 @@ async function route(request, env, url) {
 }
 
 // ---------------------------------------------------------------- auth
-const publicUser = (u) => ({
-  id: u.id, email: u.email, name: u.name, role: u.role, status: u.status,
-  householdId: u.household_id, householdName: u.household_name,
+// Accounts without an email store 'nomail:<id>' in the (NOT NULL, UNIQUE) email column
+const realEmail = (e) => (e && !e.startsWith('nomail:') ? e : null);
+const USERNAME_RE = /^[a-z0-9][a-z0-9._-]{2,29}$/;
+const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+const lc = (v) => String(v || '').trim().toLowerCase();
+
+// The site admin approves new households. SITE_ADMIN_USERNAME is set in wrangler.toml;
+// SITE_ADMIN_EMAIL is a secret so it isn't published in the repo.
+function isSiteAdmin(env, u) {
+  return !!u && ((env.SITE_ADMIN_USERNAME && u.username === lc(env.SITE_ADMIN_USERNAME))
+    || (env.SITE_ADMIN_EMAIL && realEmail(u.email) === lc(env.SITE_ADMIN_EMAIL)));
+}
+const isReserved = (env, username, email) => (env.SITE_ADMIN_USERNAME && username === lc(env.SITE_ADMIN_USERNAME))
+  || (env.SITE_ADMIN_EMAIL && email && email === lc(env.SITE_ADMIN_EMAIL));
+
+const publicUser = (u, env) => ({
+  id: u.id, username: u.username, email: realEmail(u.email), name: u.name, role: u.role, status: u.status,
+  householdId: u.household_id, householdName: u.household_name, householdStatus: u.household_status,
+  siteAdmin: isSiteAdmin(env, u),
   shareDashboard: !!u.share_dashboard, mustChangePassword: !!u.must_change_password,
 });
 
@@ -112,10 +131,11 @@ async function currentUser(request, env) {
   const token = readCookie(request, SESSION_COOKIE);
   if (!token) return null;
   const row = await env.DB.prepare(
-    `SELECT u.*, h.name AS household_name, s.expires_at FROM sessions s
+    `SELECT u.*, h.name AS household_name, h.status AS household_status, s.expires_at FROM sessions s
      JOIN users u ON u.id = s.user_id JOIN households h ON h.id = u.household_id
      WHERE s.token_hash = ?`).bind(await sha256(token)).first();
   if (!row || row.expires_at < Date.now()) return null;
+  row.email = realEmail(row.email);
   return row;
 }
 
@@ -129,45 +149,148 @@ async function startSession(env, userId) {
   return sessionCookie(token, SESSION_DAYS * 86400);
 }
 
+async function checkIdentity(env, username, email, selfId = '') {
+  if (!USERNAME_RE.test(username)) throw new HttpError(400, 'Choose a username of 3–30 characters: letters, numbers, dot, dash or underscore, starting with a letter or number.');
+  if (email && !EMAIL_RE.test(email)) throw new HttpError(400, 'That email address doesn\'t look right. Leave it blank if you don\'t want to add one.');
+  if (await env.DB.prepare('SELECT 1 FROM users WHERE username = ? AND id != ?').bind(username, selfId).first()) throw new HttpError(409, 'That username is taken. Try another.');
+  if (email && await env.DB.prepare('SELECT 1 FROM users WHERE email = ? AND id != ?').bind(email, selfId).first()) throw new HttpError(409, 'That email already has an account. Sign in instead.');
+}
+
 async function register(request, env) {
   const b = await body(request);
-  const email = str(b.email, 120).toLowerCase();
+  const username = lc(str(b.username, 30));
+  const email = lc(str(b.email, 120)) || null;
   const name = str(b.name, 60);
   const password = typeof b.password === 'string' ? b.password : '';
-  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new HttpError(400, 'Enter a valid email address.');
   if (!name) throw new HttpError(400, 'Enter your name.');
+  await checkIdentity(env, username, email);
+  if (isReserved(env, username, email)) throw new HttpError(409, 'That username or email is reserved. Choose another.');
   if (password.length < 8) throw new HttpError(400, 'Use a password of at least 8 characters.');
-  if (await env.DB.prepare('SELECT 1 FROM users WHERE email = ?').bind(email).first()) throw new HttpError(409, 'That email already has an account. Sign in instead.');
 
-  const iters = Number(env.PBKDF2_ITERATIONS) || undefined;
-  const { hash, salt } = await hashPassword(password, iters);
+  const { hash, salt } = await hashPassword(password, Number(env.PBKDF2_ITERATIONS) || undefined);
   const id = randomId();
-  let householdId, role, status;
+  let householdId, role, status, hname = null;
   if (str(b.inviteCode)) {
-    const h = await env.DB.prepare('SELECT id FROM households WHERE invite_code = ?').bind(str(b.inviteCode).toUpperCase()).first();
+    const h = await env.DB.prepare("SELECT id FROM households WHERE invite_code = ? AND status = 'active'").bind(str(b.inviteCode).toUpperCase()).first();
     if (!h) throw new HttpError(404, 'That invite code was not found. Check it with your household admin.');
     householdId = h.id; role = 'member'; status = 'pending';
   } else {
-    const hname = str(b.householdName, 60) || `${name}'s household`;
+    hname = str(b.householdName, 60) || `${name}'s household`;
     householdId = randomId();
-    await env.DB.prepare('INSERT INTO households (id, name, invite_code) VALUES (?, ?, ?)').bind(householdId, hname, inviteCode()).run();
+    // New households wait for the site admin
+    await env.DB.prepare("INSERT INTO households (id, name, invite_code, status) VALUES (?, ?, ?, 'pending')").bind(householdId, hname, inviteCode()).run();
     role = 'admin'; status = 'active';
   }
   await env.DB.prepare(
-    'INSERT INTO users (id, email, name, pass_hash, pass_salt, household_id, role, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-  ).bind(id, email, name, hash, salt, householdId, role, status).run();
+    'INSERT INTO users (id, username, email, name, pass_hash, pass_salt, household_id, role, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ).bind(id, username, email || `nomail:${id}`, name, hash, salt, householdId, role, status).run();
+  if (hname) await notify(env, env.SITE_ADMIN_EMAIL, `Vithai: new household "${hname}" waiting for approval`,
+    `${name} (username ${username}${email ? `, ${email}` : ''}) started the household "${hname}".\n\nSign in to Vithai and open Site admin to approve or reject it.`);
   const cookie = await startSession(env, id);
-  return json({ ok: true, status }, 200, { 'set-cookie': cookie });
+  return json({ ok: true, status: hname ? 'household-pending' : status }, 200, { 'set-cookie': cookie });
+}
+
+// Constant-time comparison for the optional SITE_ADMIN_PASSWORD recovery key
+function sameString(a, b) {
+  const x = new TextEncoder().encode(a), y = new TextEncoder().encode(b);
+  let d = x.length ^ y.length;
+  for (let i = 0; i < Math.max(x.length, y.length); i++) d |= (x[i] || 0) ^ (y[i] || 0);
+  return d === 0;
 }
 
 async function login(request, env) {
   const b = await body(request);
-  const email = str(b.email, 120).toLowerCase();
-  const u = await env.DB.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
-  const ok = u && (await verifyPassword(String(b.password || ''), u.pass_hash, u.pass_salt));
-  if (!ok) throw new HttpError(401, 'Email or password is incorrect.');
+  const id = lc(str(b.login ?? b.email ?? b.username, 120));
+  const password = String(b.password || '');
+  if (!id) throw new HttpError(400, 'Enter your username or email.');
+  let u = await env.DB.prepare(id.includes('@') ? 'SELECT * FROM users WHERE email = ?' : 'SELECT * FROM users WHERE username = ?').bind(id).first();
+  let ok = u && (await verifyPassword(password, u.pass_hash, u.pass_salt));
+
+  // Site admin recovery key (like MealPilot's ADMIN_PASSWORD): always works, and creates the account the first time
+  const adminId = id === lc(env.SITE_ADMIN_USERNAME) || (env.SITE_ADMIN_EMAIL && id === lc(env.SITE_ADMIN_EMAIL));
+  if (!ok && adminId && env.SITE_ADMIN_PASSWORD && sameString(password, env.SITE_ADMIN_PASSWORD)) {
+    if (!u && env.SITE_ADMIN_EMAIL) u = await env.DB.prepare('SELECT * FROM users WHERE email = ? OR username = ?').bind(lc(env.SITE_ADMIN_EMAIL), lc(env.SITE_ADMIN_USERNAME)).first();
+    if (!u) u = await createSiteAdmin(env);
+    ok = true;
+  }
+  if (!ok) throw new HttpError(401, 'Username/email or password is incorrect.');
   if (u.status === 'rejected') throw new HttpError(403, 'This account was not approved by the household admin.');
+  const h = await env.DB.prepare('SELECT status FROM households WHERE id = ?').bind(u.household_id).first();
+  if (h?.status === 'rejected') throw new HttpError(403, 'This household was not approved by the site admin.');
+
+  // The site admin's account takes the SITE_ADMIN_USERNAME if it's free
+  if (isSiteAdmin(env, u) && env.SITE_ADMIN_USERNAME && u.username !== lc(env.SITE_ADMIN_USERNAME)
+    && !(await env.DB.prepare('SELECT 1 FROM users WHERE username = ?').bind(lc(env.SITE_ADMIN_USERNAME)).first())) {
+    await env.DB.prepare('UPDATE users SET username = ? WHERE id = ?').bind(lc(env.SITE_ADMIN_USERNAME), u.id).run();
+  }
+  if (isSiteAdmin(env, u) && h?.status !== 'active') await env.DB.prepare("UPDATE households SET status = 'active' WHERE id = ?").bind(u.household_id).run();
   return json({ ok: true }, 200, { 'set-cookie': await startSession(env, u.id) });
+}
+
+async function createSiteAdmin(env) {
+  const uname = lc(env.SITE_ADMIN_USERNAME) || 'siteadmin';
+  const id = randomId(), hid = randomId();
+  const { hash, salt } = await hashPassword(randomId(16), Number(env.PBKDF2_ITERATIONS) || undefined);
+  await env.DB.batch([
+    env.DB.prepare("INSERT INTO households (id, name, invite_code, status) VALUES (?, ?, ?, 'active')").bind(hid, `${uname}'s household`, inviteCode()),
+    env.DB.prepare("INSERT INTO users (id, username, email, name, pass_hash, pass_salt, household_id, role, status, must_change_password) VALUES (?, ?, ?, ?, ?, ?, ?, 'admin', 'active', 1)")
+      .bind(id, uname, lc(env.SITE_ADMIN_EMAIL) || `nomail:${id}`, uname, hash, salt, hid),
+  ]);
+  return env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(id).first();
+}
+
+// Change your own username, email or display name
+async function updateAccount(request, env, me) {
+  const b = await body(request);
+  const username = b.username !== undefined ? lc(str(b.username, 30)) : me.username;
+  const email = b.email !== undefined ? (lc(str(b.email, 120)) || null) : me.email;
+  const name = b.name !== undefined ? str(b.name, 60) : me.name;
+  if (!name) throw new HttpError(400, 'Enter your name.');
+  await checkIdentity(env, username, email, me.id);
+  if (!isSiteAdmin(env, me) && isReserved(env, username, email)) throw new HttpError(409, 'That username or email is reserved. Choose another.');
+  if (isSiteAdmin(env, me) && env.SITE_ADMIN_USERNAME && username !== lc(env.SITE_ADMIN_USERNAME) && !(env.SITE_ADMIN_EMAIL && email === lc(env.SITE_ADMIN_EMAIL))) throw new HttpError(400, 'The site admin keeps the site admin username or email.');
+  await env.DB.prepare('UPDATE users SET username = ?, email = ?, name = ? WHERE id = ?').bind(username, email || `nomail:${me.id}`, name, me.id).run();
+  return json({ ok: true, user: { ...publicUser({ ...me, username, email, name }, env) } });
+}
+
+// Plain email notification via Resend (skipped when email isn't set up or there's no address)
+async function notify(env, to, subject, text) {
+  if (!env.RESEND_API_KEY || !to) return false;
+  try {
+    const r = await fetch('https://api.resend.com/emails', {
+      method: 'POST', headers: { authorization: `Bearer ${env.RESEND_API_KEY}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ from: env.EMAIL_FROM || 'Vithai <onboarding@resend.dev>', to: [to], subject, text }),
+    });
+    return r.ok;
+  } catch { return false; }
+}
+
+// ---------------------------------------------------------------- site admin
+async function siteAdminRoute(request, env, me, rest, method) {
+  if (!isSiteAdmin(env, me)) throw new HttpError(403, 'Only the site admin can do that.');
+  if (rest === 'households' && method === 'GET') {
+    const { results } = await env.DB.prepare(
+      `SELECT h.id, h.name, h.status, h.created_at,
+         (SELECT COUNT(*) FROM users u WHERE u.household_id = h.id AND u.status = 'active') AS members,
+         (SELECT name FROM users u WHERE u.household_id = h.id AND u.role = 'admin' ORDER BY created_at LIMIT 1) AS owner_name,
+         (SELECT username FROM users u WHERE u.household_id = h.id AND u.role = 'admin' ORDER BY created_at LIMIT 1) AS owner_username,
+         (SELECT email FROM users u WHERE u.household_id = h.id AND u.role = 'admin' ORDER BY created_at LIMIT 1) AS owner_email
+       FROM households h ORDER BY CASE h.status WHEN 'pending' THEN 0 ELSE 1 END, h.created_at DESC`).all();
+    return json({ households: results.map((r) => ({ ...r, owner_email: realEmail(r.owner_email), mine: r.id === me.household_id })) });
+  }
+  const [, hid, action] = rest.match(/^households\/([^/]+)\/(approve|reject|suspend|reactivate)$/) || [];
+  if (!hid || method !== 'POST') throw new HttpError(404, 'Not found');
+  if (hid === me.household_id) throw new HttpError(400, 'You can\'t change your own household\'s status.');
+  const h = await env.DB.prepare('SELECT * FROM households WHERE id = ?').bind(hid).first();
+  if (!h) throw new HttpError(404, 'Household not found.');
+  const status = { approve: 'active', reactivate: 'active', reject: 'rejected', suspend: 'suspended' }[action];
+  const stmts = [env.DB.prepare('UPDATE households SET status = ? WHERE id = ?').bind(status, hid)];
+  if (status !== 'active') stmts.push(env.DB.prepare('DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE household_id = ?)').bind(hid));
+  await env.DB.batch(stmts);
+  const owner = await env.DB.prepare("SELECT name, email FROM users WHERE household_id = ? AND role = 'admin' ORDER BY created_at LIMIT 1").bind(hid).first();
+  const words = { approve: 'was approved. You can now sign in and start using Vithai.', reactivate: 'was reactivated.', reject: 'was not approved.', suspend: 'was suspended by the site admin.' }[action];
+  const emailed = await notify(env, realEmail(owner?.email), `Vithai: your household "${h.name}" ${action === 'approve' ? 'is approved' : action === 'reject' ? 'was not approved' : action === 'suspend' ? 'is suspended' : 'is active again'}`, `Hi ${owner?.name || ''},\n\nYour Vithai household "${h.name}" ${words}`);
+  return json({ ok: true, status, emailed });
 }
 
 async function logout(request, env) {
@@ -192,13 +315,13 @@ async function changePassword(request, env, me) {
 async function getHousehold(env, me) {
   const h = await env.DB.prepare('SELECT id, name, invite_code FROM households WHERE id = ?').bind(me.household_id).first();
   const { results } = await env.DB.prepare(
-    'SELECT id, name, email, role, status, share_dashboard, created_at FROM users WHERE household_id = ? AND status != ? ORDER BY created_at',
+    'SELECT id, username, name, email, role, status, share_dashboard, created_at FROM users WHERE household_id = ? AND status != ? ORDER BY created_at',
   ).bind(me.household_id, 'rejected').all();
   return json({
     household: { id: h.id, name: h.name, inviteCode: me.role === 'admin' ? h.invite_code : null },
     members: results.map((r) => ({
       id: r.id, name: r.name, role: r.role, status: r.status, shareDashboard: !!r.share_dashboard,
-      email: me.role === 'admin' || r.id === me.id ? r.email : null,
+      username: r.username, email: me.role === 'admin' || r.id === me.id ? realEmail(r.email) : null,
     })),
   });
 }
@@ -523,8 +646,8 @@ async function delPlan(env, me, month) {
 async function buildBackup(env, me, scope) {
   if (scope === 'household' && me.role !== 'admin') throw new HttpError(403, 'Only the household admin can back up the whole household.');
   const users = scope === 'household'
-    ? (await env.DB.prepare('SELECT id, name, email, role, status, share_dashboard, created_at FROM users WHERE household_id = ?').bind(me.household_id).all()).results
-    : [{ id: me.id, name: me.name, email: me.email, role: me.role, status: me.status, share_dashboard: me.share_dashboard, created_at: me.created_at }];
+    ? (await env.DB.prepare('SELECT id, username, name, email, role, status, share_dashboard, created_at FROM users WHERE household_id = ?').bind(me.household_id).all()).results.map((u) => ({ ...u, email: realEmail(u.email) }))
+    : [{ id: me.id, username: me.username, name: me.name, email: me.email, role: me.role, status: me.status, share_dashboard: me.share_dashboard, created_at: me.created_at }];
   const people = [];
   for (const u of users) {
     const [st, pl, tx] = await env.DB.batch([
@@ -538,7 +661,7 @@ async function buildBackup(env, me, scope) {
       transactions: tx.results.map(({ user_id, ...t }) => t), // eslint-disable-line no-unused-vars
     });
   }
-  const out = { app: 'Vithai', version: 1, scope, exportedAt: new Date().toISOString(), exportedBy: me.email, people };
+  const out = { app: 'Vithai', version: 1, scope, exportedAt: new Date().toISOString(), exportedBy: me.username, people };
   if (scope === 'household') {
     const hid = me.household_id;
     const [hh, nifty, metaRows, facts] = await env.DB.batch([
@@ -565,6 +688,7 @@ function toBase64(text) {
 
 async function emailBackup(env, to, backup, label, beforeDelete = true) {
   if (!env.RESEND_API_KEY) return { sent: false, reason: 'Email is not set up for this site (see README).' };
+  if (!to) return { sent: false, reason: 'Your account has no email address. Add one on the Household page to receive backups by email.' };
   const name = `vithai-backup-${backup.scope}-${backup.exportedAt.slice(0, 10)}.json`;
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',

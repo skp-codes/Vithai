@@ -9,7 +9,7 @@ Vithai is a household investment planner for Indian mutual funds, gold ETFs and 
 3. **Monthly plan.** Each person has their own plan for each month. Pick a month to see what's due: the funds in each section (several per section if you like), the Nifty 50 shares due that month, and your US basket. A new month starts as a draft copied from last month; add, drop or change any fund or amount just for that month. Record what you actually bought, and edit or delete any purchase later (deleting asks first).
    - **Nifty 50 plan** (like the Excel planner): whole shares on a schedule, e.g. *HDFCBANK 1 every month, ICICIBANK 1 every 2 months, ULTRACEMCO 1 every 24 months*, worked out from your monthly budget and index weights, with first-buy months staggered so each month costs about the same. Every stock's shares, frequency and first month are editable. **Full schedule** shows the next 12 months as a grid and downloads it as Excel. Fractional monthly or weekly buying by index weight is also available.
 4. **Portfolio.** Shows invested amount, current value, gain, XIRR, and actual versus target allocation.
-5. **Household.** Works like MealPilot: one person starts a household and others join with an invite code and admin approval. Each member decides whether others in the household can see their portfolio. On the Portfolio page, "Showing" switches between your own portfolio, any member who shares theirs, and a combined **Household** view (everyone who shares, plus you) with a by-member breakdown. Members who keep theirs private are left out of the household totals.
+5. **Household.** Works like MealPilot. Anyone can ask to start a household; the **site admin** (`skp1980`) approves it on the **Site admin** page before they can start. Others join with an invite code and the household admin's approval. Everyone signs in with a **username or email**; email is optional (it's used for backups and notifications). Each member decides whether others in the household can see their portfolio. On the Portfolio page, "Showing" switches between your own portfolio, any member who shares theirs, and a combined **Household** view (everyone who shares, plus you) with a by-member breakdown. Members who keep theirs private are left out of the household totals.
 6. **Indian stocks and US stocks dashboards.** Built from your Tickertape stock screener exports (about 250 columns for India and 75 for the US). Rank stocks on any metrics with your own weights and directions, limit to the top N by market cap or to chosen sectors, and open any stock to see every field.
 7. **Optional US stocks slot.** Turn it on in Setup, set the rupee–dollar rate, and add stocks to your US basket from the US dashboard. The monthly plan splits the slot across the basket, and the portfolio values the holdings in rupees.
 8. **Data page.** A **Vithai export** bookmark exports *every* column from each Tickertape screener. Tickertape caps each export at 45 columns, so the bookmark makes several files. Drop all the files on the Data page and Vithai joins them back together.
@@ -58,7 +58,14 @@ npx wrangler d1 migrations apply vithai --remote
 # 4. Set the secret the data refresh uses (any long random string; keep a copy for step 5)
 npx wrangler secret put INGEST_TOKEN
 
-# 5. Deploy. This prints your https://vithai.<you>.workers.dev address
+# 5. The site admin (approves new households). The username is in wrangler.toml (SITE_ADMIN_USERNAME);
+#    the email is a secret so it isn't published in this public repo:
+npx wrangler secret put SITE_ADMIN_EMAIL
+#    Optional recovery key: signing in as the site admin with this password always works,
+#    and creates the account if it doesn't exist yet (like MealPilot's ADMIN_PASSWORD)
+npx wrangler secret put SITE_ADMIN_PASSWORD
+
+# 6. Deploy. This prints your https://vithai.<you>.workers.dev address
 npx wrangler deploy
 ```
 
@@ -66,7 +73,7 @@ npx wrangler deploy
    - `VITHAI_URL`: your site address from step 4, e.g. `https://vithai.<you>.workers.dev`
    - `INGEST_TOKEN`: the same value as in step 3
 7. **Load fund data now.** Under **Actions → Refresh fund data → Run workflow**. It takes about 3–5 minutes. After that it runs on its own twice a day.
-8. Open the site, choose **Start a household**, and you're the admin.
+8. Open the site and sign in as the site admin (`skp1980`, or your site admin email). Other people choose **Start a household** and wait for you to approve them under **Site admin**; you get an email about each one once email is set up.
 9. On the **Data** page, drag **Vithai export** to your bookmarks bar, run it on each Tickertape screener, and load the downloaded files.
 
 **Updating later:** `wrangler.toml` holds your own database and KV ids, so keep your edits when pulling:

@@ -35,7 +35,9 @@ const ICONS = {
   'stocks-us': '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 010 18M12 3a14 14 0 000 18"/>',
   data: '<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>',
   household: '<path d="M3 11l9-7 9 7v9a1 1 0 01-1 1h-5v-6H9v6H4a1 1 0 01-1-1z"/>',
+  site: '<path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6z"/><path d="M9 12l2 2 4-4"/>',
 };
+const routes = () => (S.me?.siteAdmin ? [...ROUTES, ['site', 'Site admin']] : ROUTES);
 const ROUTES = [['setup', 'Setup'], ['funds', 'Fund dashboard'], ['stocks-in', 'Indian stocks'], ['stocks-us', 'US stocks'], ['plan', 'Monthly plan'], ['portfolio', 'Portfolio'], ['data', 'Data'], ['household', 'Household']];
 
 // ---------------------------------------------------------------- boot & routing
@@ -45,7 +47,7 @@ async function boot() {
     S.me = user;
   } catch { S.me = null; }
   if (!S.me) return renderAuth();
-  if (S.me.status !== 'active') return renderPending();
+  if (S.me.householdStatus !== 'active' || S.me.status !== 'active') return renderPending();
   await loadData();
   window.addEventListener('hashchange', route);
   route();
@@ -68,23 +70,23 @@ function flattenFacts(f) {
 
 function route() {
   const r = (location.hash.replace('#/', '') || 'setup').split('/')[0];
-  S.route = ROUTES.some(([k]) => k === r) ? r : 'setup';
+  S.route = routes().some(([k]) => k === r) ? r : 'setup';
   renderShell();
 }
 
 function renderShell() {
-  const nav = ROUTES.map(([k, label]) => `<a href="#/${k}" class="${S.route === k ? 'on' : ''}"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICONS[k]}</svg><span>${label}</span></a>`).join('');
+  const nav = routes().map(([k, label]) => `<a href="#/${k}" class="${S.route === k ? 'on' : ''}"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICONS[k]}</svg><span>${label}</span></a>`).join('');
   app.innerHTML = `<div class="shell">
     <aside class="rail">
       <div class="brand"><h1>VITHAI</h1><p>Plant monthly, grow steadily</p></div>
       <nav class="nav">${nav}</nav>
-      <div class="rail-foot"><div class="who">${esc(S.me.name)}</div><div>${esc(S.me.householdName)}</div><button id="logout">Sign out</button></div>
+      <div class="rail-foot"><div class="who">${esc(S.me.name)} <span class="muted">@${esc(S.me.username)}</span></div><div>${esc(S.me.householdName)}</div><button id="logout">Sign out</button></div>
     </aside>
     <main id="main"></main></div>`;
   document.getElementById('logout').onclick = async () => { await api('POST', '/api/auth/logout'); location.hash = ''; location.reload(); };
   const main = document.getElementById('main');
   const ctx = { S, saveSettings, chosenFund, rankedFor, isExcluded };
-  ({ setup: renderSetup, funds: renderFunds, 'stocks-in': (m) => renderStocks(m, 'in', ctx), 'stocks-us': (m) => renderStocks(m, 'us', ctx), plan: (m) => renderPlan(m, ctx), portfolio: renderPortfolio, data: renderData, household: renderHousehold })[S.route](main);
+  ({ setup: renderSetup, funds: renderFunds, 'stocks-in': (m) => renderStocks(m, 'in', ctx), 'stocks-us': (m) => renderStocks(m, 'us', ctx), plan: (m) => renderPlan(m, ctx), portfolio: renderPortfolio, data: renderData, household: renderHousehold, site: renderSiteAdmin })[S.route](main);
   if (S.me.mustChangePassword) promptPasswordChange(true);
 }
 
@@ -674,19 +676,24 @@ async function renderHousehold(main) {
         <div class="row"><div><input class="input" readonly value="${esc(household.inviteCode)}" style="font-family:var(--mono);font-size:18px;letter-spacing:.15em"></div><button class="btn" id="copycode" style="flex:0 0 auto">Copy</button></div></div>` : ''}
     </div>
     <div class="card"><h3>Members</h3>
-      <div class="tablewrap"><table class="t"><thead><tr><th>Name</th>${admin ? '<th>Email</th>' : ''}<th>Role</th><th>Status</th><th>Sharing</th>${admin ? '<th></th>' : ''}</tr></thead>
-      <tbody>${members.map((m) => `<tr><td>${esc(m.name)}${m.id === S.me.id ? ' <span class="badge">you</span>' : ''}</td>${admin ? `<td>${esc(m.email || '')}</td>` : ''}
+      <div class="tablewrap"><table class="t"><thead><tr><th>Name</th><th>Username</th>${admin ? '<th>Email</th>' : ''}<th>Role</th><th>Status</th><th>Sharing</th>${admin ? '<th></th>' : ''}</tr></thead>
+      <tbody>${members.map((m) => `<tr><td>${esc(m.name)}${m.id === S.me.id ? ' <span class="badge">you</span>' : ''}</td><td>${esc(m.username || '')}</td>${admin ? `<td>${esc(m.email || '–')}</td>` : ''}
         <td>${m.role}</td><td>${m.status === 'pending' ? '<span class="badge gold">waiting for approval</span>' : 'active'}</td>
         <td>${m.shareDashboard ? '<span class="badge good">shared</span>' : '<span class="muted">private</span>'}</td>
         ${admin ? `<td>${m.id === S.me.id ? '' : m.status === 'pending'
           ? `<button class="btn small" data-act="approve" data-id="${m.id}">Approve</button> <button class="btn small danger" data-act="reject" data-id="${m.id}">Reject</button>`
           : `<button class="btn small" data-act="${m.role === 'admin' ? 'make-member' : 'make-admin'}" data-id="${m.id}">${m.role === 'admin' ? 'Make member' : 'Make admin'}</button> <button class="btn small" data-act="reset-password" data-id="${m.id}">Reset password</button> <button class="btn small danger" data-act="reject" data-id="${m.id}">Remove</button>`}</td>` : ''}</tr>`).join('')}</tbody></table></div></div>
-    <div class="card"><h3>Your password</h3><button class="btn" id="chpw">Change password</button></div>
+    <div class="card"><h3>Your account</h3><p class="sub">Sign in with your username or your email. Email is optional; it's used for backups${S.me.siteAdmin ? ' and new-household alerts' : ''}.</p>
+      <form id="accf" class="row" style="align-items:flex-end">
+        <div><label class="f">Name</label><input class="input" name="name" value="${esc(S.me.name)}" required></div>
+        <div><label class="f">Username</label><input class="input" name="username" value="${esc(S.me.username)}" autocapitalize="none" spellcheck="false" required></div>
+        <div><label class="f">Email <span class="muted">(optional)</span></label><input class="input" name="email" type="email" value="${esc(S.me.email || '')}"></div>
+        <button class="btn primary" style="flex:0 0 auto">Save</button><button class="btn" type="button" id="chpw" style="flex:0 0 auto">Change password</button></form></div>
     <div class="card"><h3>Back up your data</h3><p class="sub">Download everything Vithai holds for you: setup, monthly plans and every purchase. The Excel file has your purchases and plans as tables; the backup file (.json) is the complete copy.</p>
       <div class="row"><button class="btn" id="bkme" style="flex:0 0 auto">Download my backup (.json)</button><button class="btn" id="bkxl" style="flex:0 0 auto">Download my purchases and plans (Excel)</button>
       ${admin ? '<button class="btn" id="bkhh" style="flex:0 0 auto">Download whole household backup (.json)</button>' : ''}</div>
-      <div class="row" style="margin-top:10px"><button class="btn" id="emme" style="flex:0 0 auto">Email my backup to ${esc(S.me.email)}</button>
-      ${admin ? `<button class="btn" id="emhh" style="flex:0 0 auto">Email household backup to ${esc(S.me.email)}</button>` : ''}</div>
+      <div class="row" style="margin-top:10px">${S.me.email ? `<button class="btn" id="emme" style="flex:0 0 auto">Email my backup to ${esc(S.me.email)}</button>
+      ${admin ? `<button class="btn" id="emhh" style="flex:0 0 auto">Email household backup to ${esc(S.me.email)}</button>` : ''}` : '<span class="note">Add an email under "Your account" to get backups by email.</span>'}</div>
       <p class="note">Your own backup always goes to your email. A household backup can only be requested by a household admin and goes to that admin's email.</p></div>
     <div class="card"><h3>Delete data</h3><p class="sub">Deleting can't be undone. Before anything is deleted, a backup is downloaded to this device and emailed to you (when email is set up for this site): your own data's backup when you delete your data, the whole household's backup to the admin when an admin deletes household data.</p>
       <div class="row"><button class="btn danger" id="delme" style="flex:0 0 auto">Delete all my data</button>${admin ? '<button class="btn danger" id="delhh" style="flex:0 0 auto">Delete all household data</button>' : ''}</div>
@@ -697,10 +704,15 @@ async function renderHousehold(main) {
   };
   document.getElementById('copycode')?.addEventListener('click', () => { navigator.clipboard?.writeText(household.inviteCode); toast('Invite code copied'); });
   document.getElementById('chpw').onclick = () => promptPasswordChange(false);
+  document.getElementById('accf').onsubmit = async (e) => {
+    e.preventDefault();
+    const d = Object.fromEntries(new FormData(e.target).entries());
+    try { const r = await api('PUT', '/api/me/account', d); Object.assign(S.me, r.user); toast('Account updated'); renderShell(); } catch (err) { toast(err.message); }
+  };
   document.getElementById('bkme').onclick = () => downloadBackup('me').catch((e) => toast(e.message));
   document.getElementById('bkhh')?.addEventListener('click', () => downloadBackup('household').catch((e) => toast(e.message)));
   const emailBk = async (scope, btn) => { btn.disabled = true; try { const r = await api('POST', '/api/backup/email', { scope }); toast(`Backup emailed to ${r.to}`); } catch (e) { toast(e.message); } btn.disabled = false; };
-  document.getElementById('emme').onclick = (e) => emailBk('me', e.target);
+  document.getElementById('emme')?.addEventListener('click', (e) => emailBk('me', e.target));
   document.getElementById('emhh')?.addEventListener('click', (e) => emailBk('household', e.target));
   document.getElementById('bkxl').onclick = () => downloadExcel().catch((e) => toast(e.message));
   document.getElementById('delme').onclick = () => deleteDataModal('me');
@@ -714,6 +726,30 @@ async function renderHousehold(main) {
       else toast('Updated');
       renderHousehold(main);
     } catch (e) { toast(e.message); }
+  }));
+}
+
+// ---------------------------------------------------------------- SITE ADMIN
+async function renderSiteAdmin(main) {
+  const { households } = await api('GET', '/api/site/households');
+  const pending = households.filter((h) => h.status === 'pending');
+  const row = (h) => `<tr><td><b>${esc(h.name)}</b>${h.mine ? ' <span class="badge">yours</span>' : ''}</td><td>${esc(h.owner_name || '–')} <span class="muted">@${esc(h.owner_username || '')}</span></td><td>${esc(h.owner_email || '–')}</td>
+    <td class="r">${h.members}</td><td>${esc((h.created_at || '').slice(0, 10))}</td>
+    <td>${{ pending: '<span class="badge gold">waiting</span>', active: '<span class="badge good">active</span>', rejected: '<span class="badge bad">rejected</span>', suspended: '<span class="badge bad">suspended</span>' }[h.status] || esc(h.status)}</td>
+    <td style="white-space:nowrap">${h.mine ? '' : h.status === 'pending' ? `<button class="btn small primary" data-h="${h.id}" data-a="approve">Approve</button> <button class="btn small danger" data-h="${h.id}" data-a="reject">Reject</button>`
+      : h.status === 'active' ? `<button class="btn small danger" data-h="${h.id}" data-a="suspend">Suspend</button>` : `<button class="btn small" data-h="${h.id}" data-a="reactivate">Reactivate</button>`}</td></tr>`;
+  const head = '<thead><tr><th>Household</th><th>Started by</th><th>Email</th><th class="r">Members</th><th>Created</th><th>Status</th><th></th></tr></thead>';
+  main.innerHTML = `
+    <div class="page-head"><div><h2>Site admin</h2><p>Every new household waits here for your approval.</p></div></div>
+    <div class="card"><h3>Waiting for approval (${pending.length})</h3>
+      ${pending.length ? `<div class="tablewrap"><table class="t">${head}<tbody>${pending.map(row).join('')}</tbody></table></div>` : '<p class="note">Nothing waiting.</p>'}</div>
+    <div class="card"><h3>All households (${households.length})</h3><div class="tablewrap"><table class="t">${head}<tbody>${households.filter((h) => h.status !== 'pending').map(row).join('')}</tbody></table></div>
+      <p class="note">Suspending signs everyone in that household out and blocks them until you reactivate it. Their data is kept. Owners are emailed when email is set up and they have an email address.</p></div>`;
+  main.querySelectorAll('[data-a]').forEach((b) => (b.onclick = async () => {
+    const h = households.find((x) => x.id === b.dataset.h);
+    const verb = { approve: 'Approve', reject: 'Reject', suspend: 'Suspend', reactivate: 'Reactivate' }[b.dataset.a];
+    if (b.dataset.a !== 'approve' && !confirm(`${verb} the household "${h.name}"?`)) return;
+    try { const r = await api('POST', `/api/site/households/${h.id}/${b.dataset.a}`); toast(`${h.name}: ${r.status}${r.emailed ? ' · owner emailed' : ''}`); renderSiteAdmin(main); } catch (e) { toast(e.message); }
   }));
 }
 
@@ -794,12 +830,14 @@ function renderAuth() {
         <ul><li>Fund rankings from daily NAV data</li><li>Monthly plan across funds, gold and Nifty 50</li><li>Portfolio value and XIRR, shared with your household if you choose</li></ul></div>
       <div class="panel"><form id="af">
         <div class="seg">${[['login', 'Sign in'], ['create', 'Start a household'], ['join', 'Join a household']].map(([k, l]) => `<button type="button" data-m="${k}" class="${mode === k ? 'on' : ''}">${l}</button>`).join('')}</div>
-        ${mode !== 'login' ? '<div><label class="f">Your name</label><input class="input" name="name" autocomplete="name" required></div>' : ''}
-        <div><label class="f">Email</label><input class="input" name="email" type="email" autocomplete="email" required></div>
+        ${mode === 'login' ? '<div><label class="f">Username or email</label><input class="input" name="login" autocomplete="username" autocapitalize="none" spellcheck="false" required></div>' : `
+        <div><label class="f">Your name</label><input class="input" name="name" autocomplete="name" required></div>
+        <div><label class="f">Username</label><input class="input" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required minlength="3" maxlength="30" pattern="[A-Za-z0-9][A-Za-z0-9._\\-]{2,29}" title="3–30 letters, numbers, dot, dash or underscore"></div>
+        <div><label class="f">Email <span class="muted">(optional)</span></label><input class="input" name="email" type="email" autocomplete="email"><p class="note" style="margin:4px 0 0">You can sign in with it too, and it's where backups are emailed. You can add it later.</p></div>`}
         <div><label class="f">Password${mode !== 'login' ? ' (8+ characters)' : ''}</label><input class="input" name="password" type="password" minlength="${mode === 'login' ? 1 : 8}" autocomplete="${mode === 'login' ? 'current-password' : 'new-password'}" required></div>
-        ${mode === 'create' ? '<div><label class="f">Household name</label><input class="input" name="householdName" placeholder="e.g. The Kumar family"></div>' : ''}
+        ${mode === 'create' ? '<div><label class="f">Household name</label><input class="input" name="householdName" placeholder="e.g. The Kumar family"><p class="note" style="margin:4px 0 0">New households are approved by the site admin before you can start.</p></div>' : ''}
         ${mode === 'join' ? '<div><label class="f">Invite code</label><input class="input" name="inviteCode" required style="text-transform:uppercase;font-family:var(--mono);letter-spacing:.12em"></div>' : ''}
-        <button class="btn primary">${mode === 'login' ? 'Sign in' : mode === 'create' ? 'Create household' : 'Request to join'}</button>
+        <button class="btn primary">${mode === 'login' ? 'Sign in' : mode === 'create' ? 'Request a new household' : 'Request to join'}</button>
         <div id="aerr" class="err" role="alert"></div>
       </form></div></div>`;
     app.querySelectorAll('[data-m]').forEach((b) => (b.onclick = () => { mode = b.dataset.m; draw(); }));
@@ -815,7 +853,11 @@ function renderAuth() {
 
 function renderPending() {
   app.innerHTML = `<div class="auth"><div class="hero"><h1>VITHAI</h1></div><div class="panel"><div style="max-width:380px">
-    <h2>Waiting for approval</h2><p>Your request to join <b>${esc(S.me.householdName)}</b> has been sent. The household admin needs to approve it before you can start.</p>
+    <h2>Waiting for approval</h2>${S.me.householdStatus === 'pending'
+    ? `<p>Your new household <b>${esc(S.me.householdName)}</b> has been sent to the site admin. You can start as soon as it's approved${S.me.email ? `; we'll email ${esc(S.me.email)}` : ''}.</p>`
+    : S.me.householdStatus !== 'active' ? `<p>The household <b>${esc(S.me.householdName)}</b> is ${esc(S.me.householdStatus)}. Contact the site admin.</p>`
+    : `<p>Your request to join <b>${esc(S.me.householdName)}</b> has been sent. The household admin needs to approve it before you can start.</p>`}
+    <p class="note">Signed in as <b>${esc(S.me.username)}</b>.</p>
     <button class="btn" id="lo">Sign out</button></div></div></div>`;
   document.getElementById('lo').onclick = async () => { await api('POST', '/api/auth/logout'); location.reload(); };
 }
