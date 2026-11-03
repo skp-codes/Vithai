@@ -75,7 +75,7 @@ function route() {
 }
 
 function renderShell() {
-  const nav = routes().map(([k, label]) => `<a href="#/${k}" class="${S.route === k ? 'on' : ''}"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICONS[k]}</svg><span>${label}</span></a>`).join('');
+  const nav = routes().map(([k, label]) => `<a href="#/${k}" class="${S.route === k ? 'on' : ''}"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICONS[k]}</svg><span>${label}</span>${k === 'site' || k === 'household' ? `<b class="nbadge" data-badge="${k}" hidden></b>` : ''}</a>`).join('');
   app.innerHTML = `<div class="shell">
     <aside class="rail">
       <div class="brand"><h1>VITHAI</h1><p>Plant monthly, grow steadily</p></div>
@@ -84,6 +84,7 @@ function renderShell() {
     </aside>
     <main id="main"></main></div>`;
   document.getElementById('logout').onclick = async () => { await api('POST', '/api/auth/logout'); location.hash = ''; location.reload(); };
+  refreshBadges();
   const main = document.getElementById('main');
   const ctx = { S, saveSettings, chosenFund, rankedFor, isExcluded };
   ({ setup: renderSetup, funds: renderFunds, 'stocks-in': (m) => renderStocks(m, 'in', ctx), 'stocks-us': (m) => renderStocks(m, 'us', ctx), plan: (m) => renderPlan(m, ctx), portfolio: renderPortfolio, data: renderData, household: renderHousehold, site: renderSiteAdmin })[S.route](main);
@@ -724,10 +725,24 @@ async function renderHousehold(main) {
       const r = await api('POST', `/api/household/members/${b.dataset.id}/${act}`);
       if (r.tempPassword) openModal(`<h3>Temporary password</h3><p>Give this to the member. They'll be asked to change it when they sign in.</p><p style="font-family:var(--mono);font-size:22px;letter-spacing:.1em">${esc(r.tempPassword)}</p><div class="row" style="justify-content:flex-end"><button class="btn primary" data-close>Done</button></div>`);
       else toast('Updated');
-      renderHousehold(main);
+      renderHousehold(main); refreshBadges();
     } catch (e) { toast(e.message); }
   }));
 }
+
+// Red counts in the menu for things waiting on you (checked on every page change and every minute)
+async function refreshBadges() {
+  if (!S.me?.siteAdmin && S.me?.role !== 'admin') return;
+  try {
+    const b = await api('GET', '/api/badges');
+    document.querySelectorAll('[data-badge]').forEach((el) => {
+      const n = b[el.dataset.badge] || 0;
+      el.hidden = !n; el.textContent = n > 99 ? '99+' : n;
+      el.title = el.dataset.badge === 'site' ? `${n} household${n === 1 ? '' : 's'} waiting for approval` : `${n} member${n === 1 ? '' : 's'} waiting to join`;
+    });
+  } catch { /* ignore */ }
+}
+setInterval(() => { if (document.visibilityState === 'visible') refreshBadges(); }, 60000);
 
 // ---------------------------------------------------------------- SITE ADMIN
 async function renderSiteAdmin(main) {
@@ -749,7 +764,7 @@ async function renderSiteAdmin(main) {
     const h = households.find((x) => x.id === b.dataset.h);
     const verb = { approve: 'Approve', reject: 'Reject', suspend: 'Suspend', reactivate: 'Reactivate' }[b.dataset.a];
     if (b.dataset.a !== 'approve' && !confirm(`${verb} the household "${h.name}"?`)) return;
-    try { const r = await api('POST', `/api/site/households/${h.id}/${b.dataset.a}`); toast(`${h.name}: ${r.status}${r.emailed ? ' · owner emailed' : ''}`); renderSiteAdmin(main); } catch (e) { toast(e.message); }
+    try { const r = await api('POST', `/api/site/households/${h.id}/${b.dataset.a}`); toast(`${h.name}: ${r.status}${r.emailed ? ' · owner emailed' : ''}`); renderSiteAdmin(main); refreshBadges(); } catch (e) { toast(e.message); }
   }));
 }
 

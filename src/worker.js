@@ -73,6 +73,7 @@ async function route(request, env, url) {
   if (p === '/api/me/account' && m === 'PUT') return updateAccount(request, env, me);
   if (me.household_status !== 'active') throw new HttpError(403, me.household_status === 'pending' ? 'Your household is waiting for the site admin to approve it.' : 'This household is not active. Contact the site admin.');
   if (me.status !== 'active') throw new HttpError(403, 'Your account is waiting for the household admin to approve it.');
+  if (p === '/api/badges' && m === 'GET') return badges(env, me);
   if (p.startsWith('/api/site/')) return siteAdminRoute(request, env, me, p.slice(10), m);
 
   if (p === '/api/me/sharing' && m === 'PUT') return setSharing(request, env, me);
@@ -269,6 +270,15 @@ async function notify(env, to, subject, text) {
     });
     return r.ok;
   } catch { return false; }
+}
+
+// Counts shown as red badges in the menu: households waiting for the site admin, members waiting for a household admin
+async function badges(env, me) {
+  const [h, u] = await env.DB.batch([
+    env.DB.prepare("SELECT COUNT(*) AS n FROM households WHERE status = 'pending'"),
+    env.DB.prepare("SELECT COUNT(*) AS n FROM users WHERE household_id = ? AND status = 'pending'").bind(me.household_id),
+  ]);
+  return json({ site: isSiteAdmin(env, me) ? h.results[0].n : 0, household: me.role === 'admin' ? u.results[0].n : 0 });
 }
 
 // ---------------------------------------------------------------- site admin
