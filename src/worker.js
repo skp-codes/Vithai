@@ -164,7 +164,13 @@ async function register(request, env) {
   const password = typeof b.password === 'string' ? b.password : '';
   if (!name) throw new HttpError(400, 'Enter your name.');
   await checkIdentity(env, username, email);
-  if (isReserved(env, username, email)) throw new HttpError(409, 'That username or email is reserved. Choose another.');
+  // The site admin may register once, with the site admin email (a secret), while no site admin account exists
+  let siteAdminSignup = false;
+  if (isReserved(env, username, email)) {
+    const taken = await env.DB.prepare('SELECT 1 FROM users WHERE username = ? OR email = ?').bind(lc(env.SITE_ADMIN_USERNAME), lc(env.SITE_ADMIN_EMAIL) || '-').first();
+    if (taken || !env.SITE_ADMIN_EMAIL || email !== lc(env.SITE_ADMIN_EMAIL) || str(b.inviteCode)) throw new HttpError(409, 'That username or email is reserved. Choose another.');
+    siteAdminSignup = true;
+  }
   if (password.length < 8) throw new HttpError(400, 'Use a password of at least 8 characters.');
 
   const { hash, salt } = await hashPassword(password, Number(env.PBKDF2_ITERATIONS) || undefined);
@@ -178,16 +184,16 @@ async function register(request, env) {
     hname = str(b.householdName, 60) || `${name}'s household`;
     householdId = randomId();
     // New households wait for the site admin
-    await env.DB.prepare("INSERT INTO households (id, name, invite_code, status) VALUES (?, ?, ?, 'pending')").bind(householdId, hname, inviteCode()).run();
+    await env.DB.prepare('INSERT INTO households (id, name, invite_code, status) VALUES (?, ?, ?, ?)').bind(householdId, hname, inviteCode(), siteAdminSignup ? 'active' : 'pending').run();
     role = 'admin'; status = 'active';
   }
   await env.DB.prepare(
     'INSERT INTO users (id, username, email, name, pass_hash, pass_salt, household_id, role, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
   ).bind(id, username, email || `nomail:${id}`, name, hash, salt, householdId, role, status).run();
-  if (hname) await notify(env, env.SITE_ADMIN_EMAIL, `Vithai: new household "${hname}" waiting for approval`,
+  if (hname && !siteAdminSignup) await notify(env, env.SITE_ADMIN_EMAIL, `Vithai: new household "${hname}" waiting for approval`,
     `${name} (username ${username}${email ? `, ${email}` : ''}) started the household "${hname}".\n\nSign in to Vithai and open Site admin to approve or reject it.`);
   const cookie = await startSession(env, id);
-  return json({ ok: true, status: hname ? 'household-pending' : status }, 200, { 'set-cookie': cookie });
+  return json({ ok: true, status: siteAdminSignup ? 'active' : hname ? 'household-pending' : status }, 200, { 'set-cookie': cookie });
 }
 
 // Constant-time comparison for the optional SITE_ADMIN_PASSWORD recovery key
