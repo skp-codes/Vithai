@@ -132,14 +132,18 @@ export async function renderPlan(main, ctx) {
   }
 
   // Inline purchase entry: quantity and price per row, one date and one Record button per section
-  const entryCells = (slot, assetId, assetName, qtyHint, price) => `
-    <td class="r"><input class="input num rq" data-slot="${slot}" data-asset="${esc(assetId)}" data-name="${esc(assetName)}" type="number" min="0" step="any" placeholder="${qtyHint ?? ''}" style="width:86px;padding:3px 6px"></td>
-    <td class="r"><input class="input num rp" type="number" min="0" step="any" value="${price ?? ''}" style="width:86px;padding:3px 6px"></td>
-    <td class="r rtot muted">–</td>`;
+  const entryCells = (slot, assetId, assetName, qtyHint, price) => {
+    const mine = transactions.filter((t) => t.slot === slot && t.assetId === assetId);
+    const t = mine.length === 1 ? mine[0] : null; // a recorded purchase shows here and can be changed in place
+    return `
+    <td class="r"><input class="input num rq${t ? ' saved' : ''}" data-slot="${slot}" data-asset="${esc(assetId)}" data-name="${esc(assetName)}" ${t ? `data-tx="${t.id}" value="${t.units}"` : ''} type="number" min="0" step="any" placeholder="${mine.length > 1 ? 'new' : qtyHint ?? ''}" title="${t ? `Recorded ${esc(t.tradeDate)}; change it and press Save` : mine.length > 1 ? `${mine.length} purchases recorded (edit them in the list at the bottom); anything typed here is a new purchase` : ''}" style="width:86px;padding:3px 6px"></td>
+    <td class="r"><input class="input num rp${t ? ' saved' : ''}" type="number" min="0" step="any" value="${t ? t.price : price ?? ''}" style="width:86px;padding:3px 6px"></td>
+    <td class="r rtot ${t ? '' : 'muted'}">${t ? inr(t.amount, 2) : '–'}</td>`;
+  };
   const entryFoot = (slot, qtyWord) => `<div class="row tight" style="margin-top:10px;align-items:flex-end;flex-wrap:wrap">
       <div><label class="f">Date bought</label><input class="input rdate" data-slot="${slot}" type="date" value="${today()}"></div>
-      <button class="btn" data-rfill="${slot}">Fill in planned ${qtyWord}</button><button class="btn primary" data-rsave="${slot}">Record what I entered</button></div>
-    <p class="note" style="margin:6px 0 0">Type the ${qtyWord} and the ${slot === 'usstocks' || slot === 'nifty50' ? 'price per share' : 'NAV'} you actually got (from your Coin / Kite contract note), then Record. Rows left blank are skipped.</p>`;
+      <button class="btn" data-rfill="${slot}">Fill in planned ${qtyWord}</button><button class="btn primary" data-rsave="${slot}">Save what I entered</button></div>
+    <p class="note" style="margin:6px 0 0">Type the ${qtyWord} and the ${slot === 'usstocks' || slot === 'nifty50' ? 'price per share' : 'NAV'} you actually got (from your Coin / Kite contract note), then Save. Rows already recorded (shaded) show what you entered: change them and Save to correct them, or clear the ${qtyWord === 'units' ? 'units' : 'quantity'} to delete. Rows left blank are skipped. What you paid never changes when prices are updated; only the current value does.</p>`;
 
   const planned = sum(lines, 'amount');
   const recorded = sum(transactions, 'amount');
@@ -223,8 +227,7 @@ export async function renderPlan(main, ctx) {
         <td class="r">${kind === 'extra' ? `<input class="input num xq" data-sym="${esc(r.symbol)}" type="number" min="0" step="${whole ? 1 : 'any'}" value="${r.qty}" style="width:72px;padding:3px 6px" title="Change how many to buy this month">` : `<b>${skipped ? '<s>' + qtyTxt(r.qty) + '</s>' : qtyTxt(q)}</b>`}</td>
         ${np.mode === 'weekly' ? `<td class="r">${kind === 'due' && !skipped ? num(r.perWeek, 4) : '–'}</td>` : ''}<td class="r">${inr(skipped ? 0 : r.cost)}</td>
         <td class="r">${b.length ? num(sum(b, 'units'), 4) : '–'}</td>
-        <td class="r"><input class="input num nq" data-sym="${esc(r.symbol)}" type="number" min="0" step="any" placeholder="${skipped || r.stray ? 0 : whole || kind === 'extra' ? q : +q.toFixed(4)}" style="width:90px;padding:3px 6px"></td>
-        <td class="r"><input class="input num np" data-sym="${esc(r.symbol)}" type="number" min="0" step="any" value="${r.ltp ?? ''}" style="width:90px;padding:3px 6px"></td>
+        ${entryCells('nifty50', r.symbol, r.symbol, skipped || r.stray ? 0 : whole || kind === 'extra' ? q : +q.toFixed(4), r.ltp)}
         <td style="white-space:nowrap">${kind === 'extra' ? `<button class="btn small danger" data-xrm="${esc(r.symbol)}">Remove</button>` : kind === 'due' ? (skipped ? `<button class="btn small" data-unskip="${esc(r.symbol)}">Undo skip</button>` : `<button class="btn small" data-skip="${esc(r.symbol)}" title="Leave this stock out this month">Skip</button>`) : ''}</td></tr>`; };
     const left = nb.budget - nb.planned, leftToBuy = nb.budget - nb.bought;
     return `<div class="card">${head(`<button class="btn small primary" id="naddstock">+ Add a Nifty 50 stock</button><button class="btn small" id="niftyplan">Edit Nifty 50 plan</button>${whole ? '<button class="btn small" id="niftysched">Full schedule</button>' : ''}${S.me.role === 'admin' ? '<button class="btn small" id="niftyupd">Update prices</button>' : ''}<button class="btn small danger" data-drop="${line.id}">Drop</button>`)}
@@ -237,11 +240,10 @@ export async function renderPlan(main, ctx) {
         </div></div>
       <p class="note" style="margin:0 0 10px">${whole ? `<b>${due.filter((r) => r.qty && !skip.has(r.symbol)).length} stocks due in ${esc(monthLabel(month))}</b> on your schedule (set for ${inr(np.amount || line.amount)} a month, starting ${esc(monthLabel(np.startMonth))}).${before ? ' <span class="warn">This month is before the schedule starts.</span>' : ''}` : `<b>Plan:</b> ${esc(NIFTY_MODES[np.mode])}.`}
         If a stock doesn't fit this month's budget, <b>Skip</b> it and use <b>+ Add a Nifty 50 stock</b> to buy another one instead. Skips and added stocks apply to ${esc(monthLabel(month))} only.</p>
-      <div class="tablewrap" style="max-height:60vh"><table class="t" id="ntable"><thead><tr><th>Stock</th>${whole ? '<th>How often</th>' : '<th class="r">Weight</th>'}<th class="r">Price</th><th class="r">${whole ? 'Shares due' : 'Qty this month'}</th>${np.mode === 'weekly' ? '<th class="r">Qty per week</th>' : ''}<th class="r">Cost</th><th class="r">Bought</th><th class="r">Qty bought</th><th class="r">Price paid</th><th></th></tr></thead>
+      <div class="tablewrap" style="max-height:60vh"><table class="t" id="ntable"><thead><tr><th>Stock</th>${whole ? '<th>How often</th>' : '<th class="r">Weight</th>'}<th class="r">Price</th><th class="r">${whole ? 'Shares due' : 'Qty this month'}</th>${np.mode === 'weekly' ? '<th class="r">Qty per week</th>' : ''}<th class="r">Cost</th><th class="r">Bought</th><th class="r">Qty bought</th><th class="r">Price paid</th><th class="r">Amount</th><th></th></tr></thead>
       <tbody>${due.map((r) => row(r, 'due')).join('')}${extras.map((r) => row(r, 'extra')).join('')}${strays.map((r) => row(r, 'stray')).join('')}
-        ${!due.length && !extras.length && !strays.length ? `<tr><td colspan="10" class="muted">Nothing due this month.</td></tr>` : ''}</tbody></table></div>
-      <div class="row tight" style="margin-top:10px;align-items:flex-end;flex-wrap:wrap"><div><label class="f">Date bought</label><input class="input" id="ndate" type="date" value="${today()}"></div>
-        <button class="btn" id="nfill">Fill in due quantities</button><button class="btn primary" id="nrec">Record quantities entered</button></div>
+        ${!due.length && !extras.length && !strays.length ? `<tr><td colspan="11" class="muted">Nothing due this month.</td></tr>` : ''}</tbody></table></div>
+      ${entryFoot('nifty50', 'quantities')}
       ${notDue.length ? `<details style="margin-top:12px"><summary style="cursor:pointer"><b>Not due this month (${notDue.length})</b></summary>
         <div class="tablewrap" style="margin-top:8px"><table class="t"><thead><tr><th>Stock</th><th>How often</th><th>Next due</th></tr></thead>
         <tbody>${notDue.sort((a, b) => (a.next || '9').localeCompare(b.next || '9')).map((r) => `<tr><td><b>${esc(r.symbol)}</b></td><td>${esc(cadence(r.sch))}</td><td>${r.next ? esc(monthLabel(r.next)) : '–'}</td></tr>`).join('')}</tbody></table></div></details>` : ''}
@@ -316,18 +318,24 @@ export async function renderPlan(main, ctx) {
   const rowOf = (i) => i.closest('tr');
   const showTot = (tr) => { const q = +tr.querySelector('.rq').value, p = +tr.querySelector('.rp').value; const c = tr.querySelector('.rtot'); c.textContent = q && p ? inr(q * p, 2) : '–'; c.classList.toggle('muted', !(q && p)); };
   main.querySelectorAll('.rq, .rp').forEach((i) => (i.oninput = () => showTot(rowOf(i))));
-  main.querySelectorAll('[data-rfill]').forEach((b) => (b.onclick = () => main.querySelectorAll(`.rq[data-slot="${b.dataset.rfill}"]`).forEach((i) => { if (+i.placeholder) { i.value = i.placeholder; showTot(rowOf(i)); } })));
+  main.querySelectorAll('[data-rfill]').forEach((b) => (b.onclick = () => main.querySelectorAll(`.rq[data-slot="${b.dataset.rfill}"]`).forEach((i) => { if (!i.dataset.tx && i.value === '' && +i.placeholder) { i.value = i.placeholder; showTot(rowOf(i)); } })));
   main.querySelectorAll('[data-rsave]').forEach((b) => (b.onclick = async () => {
-    const slot = b.dataset.rsave;
+    const slot = b.dataset.rsave, stock = slot === 'usstocks' || slot === 'nifty50';
     const date = main.querySelector(`.rdate[data-slot="${slot}"]`).value || today();
-    const entries = [...main.querySelectorAll(`.rq[data-slot="${slot}"]`)].map((i) => ({ i, units: Number(i.value), price: Number(rowOf(i).querySelector('.rp').value) })).filter((e) => e.units > 0);
-    if (!entries.length) return toast(`Enter the ${slot === 'usstocks' ? 'quantity' : 'units'} you bought first (or use "Fill in planned").`);
-    if (entries.some((e) => !(e.price > 0))) return toast(`Every row with a ${slot === 'usstocks' ? 'quantity needs the price you paid' : 'units figure needs the NAV you got'}.`);
-    if (!confirm(`Record ${entries.length} purchase${entries.length > 1 ? 's' : ''} dated ${date}?`)) return;
+    const rows = [...main.querySelectorAll(`.rq[data-slot="${slot}"]`)].map((i) => ({ i, units: Number(i.value) || 0, price: Number(rowOf(i).querySelector('.rp').value) || 0, t: i.dataset.tx ? transactions.find((x) => x.id === i.dataset.tx) : null }));
+    const adds = rows.filter((e) => !e.t && e.units > 0);
+    const edits = rows.filter((e) => e.t && e.units > 0 && (Math.abs(e.units - e.t.units) > 1e-9 || Math.abs(e.price - e.t.price) > 1e-9));
+    const dels = rows.filter((e) => e.t && !(e.units > 0));
+    if (!adds.length && !edits.length && !dels.length) return toast(`Nothing new to save. Enter the ${stock ? 'quantity' : 'units'} you bought (or use "Fill in planned").`);
+    if ([...adds, ...edits].some((e) => !(e.price > 0))) return toast(`Every row with a ${stock ? 'quantity needs the price you paid' : 'units figure needs the NAV you got'}.`);
+    const parts = [adds.length && `record ${adds.length} new purchase${adds.length > 1 ? 's' : ''} dated ${date}`, edits.length && `update ${edits.length} recorded purchase${edits.length > 1 ? 's' : ''}`, dels.length && `delete ${dels.length} purchase${dels.length > 1 ? 's' : ''} (${dels.map((e) => e.t.assetName).join(', ')})`].filter(Boolean);
+    if (!confirm(`${parts.join(', ').replace(/^./, (c) => c.toUpperCase())}?`)) return;
     try {
       await ensureSaved();
-      for (const e of entries) await api('POST', '/api/transactions', { slot, assetId: e.i.dataset.asset, assetName: e.i.dataset.name, tradeDate: date, month, units: e.units, price: e.price });
-      toast(`${entries.length} purchase${entries.length > 1 ? 's' : ''} recorded`); rerender();
+      for (const e of adds) await api('POST', '/api/transactions', { slot, assetId: e.i.dataset.asset, assetName: e.i.dataset.name, tradeDate: date, month, units: e.units, price: e.price });
+      for (const e of edits) await api('PUT', `/api/transactions/${e.t.id}`, { ...e.t, units: e.units, price: e.price, amount: null }); // amount = units × price
+      for (const e of dels) await api('DELETE', `/api/transactions/${e.t.id}`);
+      toast('Saved'); rerender();
     } catch (err) { toast(err.message); }
   }));
   main.querySelectorAll('[data-skip]').forEach((b) => (b.onclick = async () => {
@@ -352,19 +360,6 @@ export async function renderPlan(main, ctx) {
     await save(picked.length ? `${picked.length} stock${picked.length > 1 ? 's' : ''} in ${monthLabel(month)}'s plan` : 'This month\'s Nifty 50 stocks updated');
   }));
   document.getElementById('niftyupd')?.addEventListener('click', () => niftyPricesModal(ctx, rerender));
-  document.getElementById('nfill')?.addEventListener('click', () => main.querySelectorAll('.nq').forEach((i) => { if (+i.placeholder) i.value = i.placeholder; }));
-  document.getElementById('nrec')?.addEventListener('click', async () => {
-    const date = document.getElementById('ndate').value || today();
-    const entries = [...main.querySelectorAll('.nq')].map((i) => ({ sym: i.dataset.sym, units: Number(i.value), price: Number(main.querySelector(`.np[data-sym="${CSS.escape(i.dataset.sym)}"]`).value) })).filter((e) => e.units > 0);
-    if (!entries.length) return toast('Enter the quantities you bought first (or use "Fill in due quantities").');
-    if (entries.some((e) => !(e.price > 0))) return toast('Every row with a quantity needs the price you paid.');
-    if (!confirm(`Record ${entries.length} Nifty 50 purchase${entries.length > 1 ? 's' : ''} dated ${date}?`)) return;
-    try {
-      await ensureSaved();
-      for (const e of entries) await api('POST', '/api/transactions', { slot: 'nifty50', assetId: e.sym, assetName: e.sym, tradeDate: date, month, units: e.units, price: e.price });
-      toast(`${entries.length} Nifty 50 purchases recorded`); rerender();
-    } catch (err) { toast(err.message); }
-  });
 }
 
 // One line per allocated section, using your pinned / top-ranked fund
