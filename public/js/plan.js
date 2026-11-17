@@ -425,8 +425,8 @@ function addNiftyStockModal(S, month, line, tx, onAdd) {
       <div class="stat"><div class="k">These stocks</div><div class="v" id="asc">₹0</div></div>
       <div class="stat"><div class="k" id="aslk">Budget remaining</div><div class="v" id="asl">${inr(left0)}</div></div></div>
     <input class="input" id="asq" placeholder="Search symbol or company…" style="margin-bottom:8px">
-    <div class="tablewrap" style="max-height:42vh"><table class="t"><thead><tr><th>Stock</th><th class="r">Weight</th><th class="r">Price</th><th class="r">Fits in budget</th><th class="r">Qty</th><th class="r">Cost</th></tr></thead><tbody id="asl-body">
-    ${list.map((x) => `<tr data-q="${esc((x.symbol + ' ' + (x.name || '')).toLowerCase())}"><td><b>${esc(x.symbol)}</b>${dueNow.has(x.symbol) ? ' <span class="badge">due</span>' : ''}${already.has(x.symbol) ? ' <span class="badge good">added</span>' : ''}${x.name ? `<span class="a" style="display:block">${esc(x.name)}</span>` : ''}</td>
+    <div class="tablewrap" style="max-height:42vh"><table class="t"><thead><tr><th data-sort="symbol" class="sortable">Stock</th><th data-sort="weight" class="r sortable">Weight</th><th data-sort="price" class="r sortable">Price</th><th data-sort="fits" class="r sortable">Fits in budget</th><th data-sort="qty" class="r sortable">Qty</th><th data-sort="cost" class="r sortable">Cost</th></tr></thead><tbody id="asl-body">
+    ${list.map((x) => `<tr data-q="${esc((x.symbol + ' ' + (x.name || '')).toLowerCase())}" data-symbol="${esc(x.symbol)}" data-weight="${x.weight ?? ''}" data-price="${x.ltp ?? ''}" data-fits="${x.ltp && left0 > 0 ? left0 / x.ltp : 0}"><td><b>${esc(x.symbol)}</b>${dueNow.has(x.symbol) ? ' <span class="badge">due</span>' : ''}${already.has(x.symbol) ? ' <span class="badge good">added</span>' : ''}${x.name ? `<span class="a" style="display:block">${esc(x.name)}</span>` : ''}</td>
       <td class="r">${pct(x.weight)}</td><td class="r">${num(x.ltp, 2)}</td><td class="r">${x.ltp && left0 > 0 ? (whole ? Math.floor(left0 / x.ltp) : num(left0 / x.ltp, 2)) : 0}</td>
       <td class="r"><input class="input num asn" data-sym="${esc(x.symbol)}" data-p="${x.ltp || 0}" type="number" min="0" step="${whole ? 1 : 'any'}" value="${already.has(x.symbol) ? nb.extras.find((e) => e.symbol === x.symbol).qty : ''}" style="width:72px;padding:3px 6px"></td>
       <td class="r" data-cost="${esc(x.symbol)}">–</td></tr>`).join('')}</tbody></table></div>
@@ -450,6 +450,31 @@ function addNiftyStockModal(S, month, line, tx, onAdd) {
       root.querySelector('#asok').disabled = !n;
     };
     inputs.forEach((i) => (i.oninput = upd));
+    // Click a column header to sort; click again to reverse. Typed quantities are kept.
+    const body = root.querySelector('#asl-body');
+    const sortVal = (tr, k) => {
+      if (k === 'symbol') return tr.dataset.symbol;
+      const i = tr.querySelector('.asn');
+      if (k === 'qty') return Number(i.value) || 0;
+      if (k === 'cost') return (Number(i.value) || 0) * Number(i.dataset.p);
+      const v = tr.dataset[k]; return v === '' ? null : Number(v);
+    };
+    let sortKey = 'weight', sortDir = -1;
+    const heads = [...root.querySelectorAll('th[data-sort]')];
+    const markHeads = () => heads.forEach((h) => { h.dataset.arrow = h.dataset.sort === sortKey ? (sortDir > 0 ? ' ▲' : ' ▼') : ''; h.textContent = h.textContent.replace(/ [▲▼]$/, '') + h.dataset.arrow; });
+    heads.forEach((h) => { h.style.cursor = 'pointer'; h.title = 'Sort by this column'; h.onclick = () => {
+      const k = h.dataset.sort;
+      if (k === sortKey) sortDir = -sortDir; else { sortKey = k; sortDir = k === 'symbol' ? 1 : -1; }
+      const trs = [...body.querySelectorAll('tr')];
+      trs.sort((a, b) => {
+        const va = sortVal(a, k), vb = sortVal(b, k);
+        if (va === null && vb === null) return 0; if (va === null) return 1; if (vb === null) return -1; // blanks last
+        return (typeof va === 'string' ? va.localeCompare(vb) : va - vb) * sortDir;
+      });
+      trs.forEach((tr) => body.appendChild(tr));
+      markHeads();
+    }; });
+    markHeads();
     root.querySelector('#asq').oninput = (e) => { const q = e.target.value.trim().toLowerCase(); root.querySelectorAll('#asl-body tr').forEach((tr) => { tr.hidden = q && !tr.dataset.q.includes(q); }); };
     root.querySelector('#asok').onclick = () => {
       const picked = inputs.filter((i) => Number(i.value) > 0).map((i) => ({ symbol: i.dataset.sym, qty: Number(i.value) }));
