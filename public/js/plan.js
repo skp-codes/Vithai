@@ -131,6 +131,16 @@ export async function renderPlan(main, ctx) {
     await saveSettings({ niftyPlan: { mode: 'whole', startMonth, amount: niftyLine.amount, excluded: [], schedule: buildSchedule(niftyStocks(S, []), niftyLine.amount) } }, null);
   }
 
+  // Inline purchase entry: quantity and price per row, one date and one Record button per section
+  const entryCells = (slot, assetId, assetName, qtyHint, price) => `
+    <td class="r"><input class="input num rq" data-slot="${slot}" data-asset="${esc(assetId)}" data-name="${esc(assetName)}" type="number" min="0" step="any" placeholder="${qtyHint ?? ''}" style="width:86px;padding:3px 6px"></td>
+    <td class="r"><input class="input num rp" type="number" min="0" step="any" value="${price ?? ''}" style="width:86px;padding:3px 6px"></td>
+    <td class="r rtot muted">–</td>`;
+  const entryFoot = (slot, qtyWord) => `<div class="row tight" style="margin-top:10px;align-items:flex-end;flex-wrap:wrap">
+      <div><label class="f">Date bought</label><input class="input rdate" data-slot="${slot}" type="date" value="${today()}"></div>
+      <button class="btn" data-rfill="${slot}">Fill in planned ${qtyWord}</button><button class="btn primary" data-rsave="${slot}">Record what I entered</button></div>
+    <p class="note" style="margin:6px 0 0">Type the ${qtyWord} and the ${slot === 'usstocks' || slot === 'nifty50' ? 'price per share' : 'NAV'} you actually got (from your Coin / Kite contract note), then Record. Rows left blank are skipped.</p>`;
+
   const planned = sum(lines, 'amount');
   const recorded = sum(transactions, 'amount');
   main.innerHTML = `
@@ -160,17 +170,18 @@ export async function renderPlan(main, ctx) {
     if (FUND_SECTIONS.includes(slot)) {
       const extraTx = tx.filter((t) => !ls.some((l) => l.assetId === t.assetId));
       return `<div class="card">${head(`<button class="btn small" data-add="${slot}">+ Add ${slot === 'gold' ? 'gold fund / ETF' : 'fund'} or extra purchase</button>`)}
-        <div class="tablewrap"><table class="t"><thead><tr><th>Fund</th><th class="r">Planned ₹</th><th class="r">Latest NAV</th><th class="r">Est. units</th><th class="r">Bought</th><th></th></tr></thead>
+        <div class="tablewrap"><table class="t"><thead><tr><th>Fund</th><th class="r">Planned ₹</th><th class="r">Bought</th><th class="r">Units bought</th><th class="r">NAV paid</th><th class="r">Amount</th><th></th></tr></thead>
         <tbody>${ls.map((l) => { const f = fundOf(l.assetId); const b = tx.filter((t) => t.assetId === l.assetId); return `<tr>
-          <td class="nm">${esc(l.assetName)}<span class="a">${f ? esc(f.amc) : '<span class="warn">no longer in the fund list</span>'}${slot === 'gold' ? ' · buy on Kite' : ''}</span></td>
-          <td class="r"><input class="input num amt" data-line="${l.id}" type="number" min="0" step="100" value="${l.amount}" style="width:110px;padding:4px 8px"></td>
-          <td class="r">${f ? num(f.nav, 4) : '–'}</td><td class="r">${f?.nav ? num(l.amount / f.nav, 3) : '–'}</td>
+          <td class="nm">${esc(l.assetName)}<span class="a">${f ? esc(f.amc) : '<span class="warn">no longer in the fund list</span>'}${slot === 'gold' ? ' · buy on Kite' : ''}${f?.nav ? ` · latest NAV ${num(f.nav, 4)}, about ${num(l.amount / f.nav, 3)} units` : ''}</span></td>
+          <td class="r"><input class="input num amt" data-line="${l.id}" type="number" min="0" step="100" value="${l.amount}" style="width:92px;padding:4px 8px"></td>
           <td class="r">${b.length ? `${num(sum(b, 'units'), 3)} <span class="muted">(${inr(sum(b, 'amount'))})</span>` : '–'}</td>
-          <td style="white-space:nowrap"><button class="btn small" data-rec="${l.id}">Record</button> <button class="btn small danger" data-drop="${l.id}">Drop</button></td></tr>`; }).join('')}
+          ${entryCells(slot, l.assetId, l.assetName, f?.nav ? +(l.amount / f.nav).toFixed(3) : '', f?.nav)}
+          <td style="white-space:nowrap"><button class="btn small" data-rec="${l.id}" title="Record with a date, amount and note">More…</button> <button class="btn small danger" data-drop="${l.id}">Drop</button></td></tr>`; }).join('')}
         ${extraTx.map((t) => `<tr><td class="nm">${esc(t.assetName)} <span class="badge">extra · not in plan</span><span class="a">Bought ${esc(t.tradeDate)}${t.note ? ` · ${esc(t.note)}` : ''}</span></td>
-          <td class="r muted">–</td><td class="r">${num(t.price, 4)}</td><td class="r">–</td><td class="r">${num(t.units, 3)} <span class="muted">(${inr(t.amount)})</span></td>
+          <td class="r muted">–</td><td class="r">${num(t.units, 3)} <span class="muted">(${inr(t.amount)})</span></td><td class="r muted">${num(t.units, 3)}</td><td class="r muted">${num(t.price, 4)}</td><td class="r muted">${inr(t.amount, 2)}</td>
           <td style="white-space:nowrap"><button class="btn small" data-edit="${t.id}">Edit</button> <button class="btn small danger" data-del="${t.id}">Delete</button></td></tr>`).join('')}
-        ${!ls.length && !extraTx.length ? '<tr><td colspan="6" class="muted">No funds in this section this month.</td></tr>' : ''}</tbody></table></div></div>`;
+        ${!ls.length && !extraTx.length ? '<tr><td colspan="7" class="muted">No funds in this section this month.</td></tr>' : ''}</tbody></table></div>
+        ${ls.length ? entryFoot(slot, 'units') : ''}</div>`;
     }
     if (slot === 'nifty50') return niftySection(ls[0], tx, head);
     if (slot === 'usstocks') {
@@ -181,10 +192,12 @@ export async function renderPlan(main, ctx) {
       return `<div class="card">${head(`<a class="btn small" href="#/stocks-us">Edit basket</a><button class="btn small danger" data-drop="${line.id}">Drop</button>`)}
         <div class="row" style="align-items:center;margin-bottom:10px"><div style="flex:0 0 200px"><label class="f">Amount this month (₹)</label><input class="input num amt" data-line="${line.id}" type="number" min="0" step="100" value="${line.amount}"></div>
           <p class="note" style="margin:0">${s.usdInr ? `About $${num(line.amount / s.usdInr, 2)} at ₹${num(s.usdInr, 2)} per dollar.` : '<span class="warn">Set the rupee–dollar rate in Setup to see quantities.</span>'}</p></div>
-        <div class="tablewrap"><table class="t"><thead><tr><th>Stock</th><th class="r">Share</th><th class="r">Amount ₹</th><th class="r">Price $</th><th class="r">Qty</th><th class="r">Bought</th><th></th></tr></thead>
+        <div class="tablewrap"><table class="t"><thead><tr><th>Stock</th><th class="r">Share</th><th class="r">Amount ₹</th><th class="r">Price $</th><th class="r">Qty</th><th class="r">Bought</th><th class="r">Qty bought</th><th class="r">Price paid ₹</th><th class="r">Amount</th><th></th></tr></thead>
         <tbody>${basket.map((x, i) => { const inrAmt = line.amount * (x.weight || 0) / wT; const usd = usPrice(x.key); const q = usd && s.usdInr ? inrAmt / s.usdInr / usd : null; const b = tx.filter((t) => t.assetId === x.key); return `<tr>
           <td class="nm">${esc(x.name)}</td><td class="r">${pct((x.weight || 0) / wT * 100, 0)}</td><td class="r">${inr(inrAmt, 2)}</td><td class="r">${num(usd, 2)}</td><td class="r">${q ? num(q, 4) : '–'}</td>
-          <td class="r">${b.length ? num(sum(b, 'units'), 4) : '–'}</td><td><button class="btn small" data-recus="${i}" data-q="${q ?? ''}" data-p="${usd && s.usdInr ? (usd * s.usdInr).toFixed(2) : ''}">Record</button></td></tr>`; }).join('') || '<tr><td colspan="7" class="muted">Your US basket is empty. Add stocks on the US stocks page.</td></tr>'}</tbody></table></div></div>`;
+          <td class="r">${b.length ? num(sum(b, 'units'), 4) : '–'}</td>${entryCells('usstocks', x.key, x.name, q ? +q.toFixed(4) : '', usd && s.usdInr ? +(usd * s.usdInr).toFixed(2) : '')}
+          <td><button class="btn small" data-recus="${i}" data-q="${q ?? ''}" data-p="${usd && s.usdInr ? (usd * s.usdInr).toFixed(2) : ''}" title="Record with a date, amount and note">More…</button></td></tr>`; }).join('') || '<tr><td colspan="10" class="muted">Your US basket is empty. Add stocks on the US stocks page.</td></tr>'}</tbody></table></div>
+        ${basket.length ? entryFoot('usstocks', 'quantities') : ''}</div>`;
     }
     return '';
   }
@@ -283,11 +296,11 @@ export async function renderPlan(main, ctx) {
   main.querySelectorAll('[data-recus]').forEach((b) => (b.onclick = async () => {
     const x = (s.usBasket || [])[+b.dataset.recus];
     await ensureSaved();
-    recordModal({ slot: 'usstocks', assetId: x.key, assetName: x.name, price: b.dataset.p, units: b.dataset.q ? +(+b.dataset.q).toFixed(4) : '', priceLabel: 'Price paid per share (₹ = $ price × rate)' }, rerender);
+    recordModal({ slot: 'usstocks', assetId: x.key, assetName: x.name, price: b.dataset.p, units: b.dataset.q ? +(+b.dataset.q).toFixed(4) : '', priceLabel: 'Purchase price per share (₹ = $ price × rate)' }, rerender);
   }));
   main.querySelectorAll('[data-edit]').forEach((b) => (b.onclick = () => {
     const t = transactions.find((x) => x.id === b.dataset.edit);
-    recordModal({ ...t, priceLabel: t.slot === 'usstocks' ? 'Price paid per share (₹)' : null }, rerender, t.id);
+    recordModal({ ...t, priceLabel: t.slot === 'usstocks' ? 'Purchase price per share (₹)' : null }, rerender, t.id);
   }));
   main.querySelectorAll('[data-del]').forEach((b) => (b.onclick = async () => {
     const t = transactions.find((x) => x.id === b.dataset.del);
@@ -300,6 +313,23 @@ export async function renderPlan(main, ctx) {
     rerender();
   }));
   document.getElementById('niftysched')?.addEventListener('click', () => scheduleModal(S, month));
+  const rowOf = (i) => i.closest('tr');
+  const showTot = (tr) => { const q = +tr.querySelector('.rq').value, p = +tr.querySelector('.rp').value; const c = tr.querySelector('.rtot'); c.textContent = q && p ? inr(q * p, 2) : '–'; c.classList.toggle('muted', !(q && p)); };
+  main.querySelectorAll('.rq, .rp').forEach((i) => (i.oninput = () => showTot(rowOf(i))));
+  main.querySelectorAll('[data-rfill]').forEach((b) => (b.onclick = () => main.querySelectorAll(`.rq[data-slot="${b.dataset.rfill}"]`).forEach((i) => { if (+i.placeholder) { i.value = i.placeholder; showTot(rowOf(i)); } })));
+  main.querySelectorAll('[data-rsave]').forEach((b) => (b.onclick = async () => {
+    const slot = b.dataset.rsave;
+    const date = main.querySelector(`.rdate[data-slot="${slot}"]`).value || today();
+    const entries = [...main.querySelectorAll(`.rq[data-slot="${slot}"]`)].map((i) => ({ i, units: Number(i.value), price: Number(rowOf(i).querySelector('.rp').value) })).filter((e) => e.units > 0);
+    if (!entries.length) return toast(`Enter the ${slot === 'usstocks' ? 'quantity' : 'units'} you bought first (or use "Fill in planned").`);
+    if (entries.some((e) => !(e.price > 0))) return toast(`Every row with a ${slot === 'usstocks' ? 'quantity needs the price you paid' : 'units figure needs the NAV you got'}.`);
+    if (!confirm(`Record ${entries.length} purchase${entries.length > 1 ? 's' : ''} dated ${date}?`)) return;
+    try {
+      await ensureSaved();
+      for (const e of entries) await api('POST', '/api/transactions', { slot, assetId: e.i.dataset.asset, assetName: e.i.dataset.name, tradeDate: date, month, units: e.units, price: e.price });
+      toast(`${entries.length} purchase${entries.length > 1 ? 's' : ''} recorded`); rerender();
+    } catch (err) { toast(err.message); }
+  }));
   main.querySelectorAll('[data-skip]').forEach((b) => (b.onclick = async () => {
     nLine.skip = [...new Set([...(nLine.skip || []), b.dataset.skip])]; await save(`${b.dataset.skip} skipped for ${monthLabel(month)}`);
   }));
@@ -385,8 +415,8 @@ export function recordModal(pre, done, editId) {
     <form id="rf" style="display:grid;gap:12px">
       <div class="row"><div><label class="f">Date bought</label><input class="input" name="tradeDate" type="date" value="${esc(pre.tradeDate || today())}" required></div>
       <div><label class="f">Counts towards month</label><input class="input" name="month" type="month" value="${esc(pre.month || month)}"></div></div>
-      <div class="row"><div><label class="f">Units / quantity</label><input class="input num" name="units" type="number" step="any" min="0" value="${pre.units ?? ''}" required></div>
-      <div><label class="f">${esc(pre.priceLabel || (pre.slot === 'nifty50' ? 'Price paid' : 'NAV paid'))}</label><input class="input num" name="price" type="number" step="any" min="0" value="${pre.price ?? ''}" required></div></div>
+      <div class="row"><div><label class="f">${pre.slot === 'nifty50' || pre.slot === 'usstocks' ? 'Quantity (shares)' : 'Units bought'}</label><input class="input num" name="units" type="number" step="any" min="0" value="${pre.units ?? ''}" required></div>
+      <div><label class="f">${esc(pre.priceLabel || (pre.slot === 'nifty50' ? 'Purchase price per share (₹)' : 'NAV you bought at'))}</label><input class="input num" name="price" type="number" step="any" min="0" value="${pre.price ?? ''}" required></div></div>
       <div class="row"><div><label class="f">Total amount (₹)</label><input class="input num" name="amount" type="number" step="any" min="0" value="${editId ? pre.amount : ''}"></div>
       <div><label class="f">Note (optional)</label><input class="input" name="note" value="${esc(pre.note || '')}"></div></div>
       <p class="note">Leave the amount blank to use units × price. Check the actual units on your Coin / Kite contract note.</p>

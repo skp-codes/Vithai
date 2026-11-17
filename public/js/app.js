@@ -565,7 +565,7 @@ function wirePurchases(main, tx, done) {
   card.querySelector('#pfq').oninput = filter;
   card.querySelectorAll('[data-pedit]').forEach((b) => (b.onclick = () => {
     const t = tx.find((x) => x.id === b.dataset.pedit);
-    recordModal({ ...t, priceLabel: t.slot === 'usstocks' ? 'Price paid per share (₹)' : null }, done, t.id);
+    recordModal({ ...t, priceLabel: t.slot === 'usstocks' ? 'Purchase price per share (₹)' : null }, done, t.id);
   }));
   card.querySelectorAll('[data-pdel]').forEach((b) => (b.onclick = async () => {
     const t = tx.find((x) => x.id === b.dataset.pdel);
