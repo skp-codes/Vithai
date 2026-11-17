@@ -1,5 +1,5 @@
 // Indian and US stock dashboards, built from the Tickertape stock screener exports.
-import { esc, num, toast, openModal } from './util.js';
+import { esc, num, toast, openModal, possessive } from './util.js';
 import { rankRows } from './ranking.js';
 import { loadDataset, companyKey, keyFieldsFor } from './tickertape.js';
 
@@ -27,7 +27,7 @@ export async function renderStocks(main, mkt, ctx) {
   main.innerHTML = `<div class="boot" style="height:200px">Loading ${LABEL[mkt]}…</div>`;
   let ds;
   try { ds = await loadDataset(mkt); } catch (e) {
-    main.innerHTML = `<div class="page-head"><div><h2>${LABEL[mkt]}</h2></div></div>
+    main.innerHTML = `<div class="page-head"><div><h2>${esc(possessive(ctx.S.me.name))} ${LABEL[mkt]}</h2></div></div>
       <div class="card"><h3>No ${LABEL[mkt]} data yet</h3><p class="sub">${esc(e.message)}</p>
       <a class="btn primary" href="#/data">Go to Data</a></div>`;
     return;
@@ -63,7 +63,7 @@ export async function renderStocks(main, mkt, ctx) {
   };
 
   main.innerHTML = `
-    <div class="page-head"><div><h2>${LABEL[mkt]}</h2><p>${num(ds.rows.length, 0)} stocks · ${ds.columns.length} columns · Tickertape data loaded ${esc(new Date(ds.meta.uploadedAt || ds.builtAt).toLocaleDateString('en-GB', { dateStyle: 'medium' }))}</p></div>
+    <div class="page-head"><div><h2>${esc(possessive(ctx.S.me.name))} ${LABEL[mkt]}</h2><p>${num(ds.rows.length, 0)} stocks · ${ds.columns.length} columns · Tickertape data loaded ${esc(new Date(ds.meta.uploadedAt || ds.builtAt).toLocaleDateString('en-GB', { dateStyle: 'medium' }))}</p></div>
       <div class="grow"></div><a class="btn" href="#/data">Load newer data</a></div>
     ${mkt === 'us' ? basketBox() : ''}
     <div class="funds-layout">

@@ -79,3 +79,6 @@ export function waitForXLSX() {
     }, 100);
   });
 }
+
+// "Sharath" -> "Sharath's", "James" -> "James'"; used for page titles like "Sharath's portfolio"
+export const possessive = (name) => { const n = String(name || 'My').trim(); return /s$/i.test(n) ? `${n}'` : `${n}'s`; };

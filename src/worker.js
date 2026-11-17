@@ -655,6 +655,11 @@ async function putPlan(request, env, me, month) {
   const lines = (Array.isArray(b.lines) ? b.lines : []).slice(0, 200).map((l) => ({
     id: str(l.id, 40) || randomId(6), slot: SLOTS.includes(l.slot) ? l.slot : null,
     assetId: str(l.assetId, 300), assetName: str(l.assetName, 200), amount: Math.max(0, num(l.amount) ?? 0),
+    // Nifty 50 line only: stocks skipped this month, and stocks added just for this month
+    ...(l.slot === 'nifty50' ? {
+      skip: (Array.isArray(l.skip) ? l.skip : []).slice(0, 100).map((x) => str(x, 30).toUpperCase()).filter(Boolean),
+      extra: (Array.isArray(l.extra) ? l.extra : []).slice(0, 100).map((x) => ({ symbol: str(x?.symbol, 30).toUpperCase(), qty: Math.max(0, num(x?.qty) ?? 0) })).filter((x) => x.symbol && x.qty > 0),
+    } : {}),
   })).filter((l) => l.slot && l.assetId);
   const data = JSON.stringify({ lines, note: str(b.note, 1000) });
   await env.DB.prepare(

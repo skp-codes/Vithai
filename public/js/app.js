@@ -1,8 +1,8 @@
 // Vithai front-end: a small single-page app with hash routes.
-import { api, esc, inr, num, pct, signCls, today, thisMonth, monthLabel, toast, openModal, xirr, waitForXLSX } from './util.js'; // eslint-disable-line no-unused-vars
+import { api, esc, inr, num, pct, signCls, today, thisMonth, monthLabel, toast, openModal, xirr, waitForXLSX, possessive } from './util.js'; // eslint-disable-line no-unused-vars
 import { METRICS, SLOTS, DEFAULT_CRITERIA, rankFunds } from './ranking.js';
 import { renderStocks, usPriceLookup } from './stocks.js'; // eslint-disable-line no-unused-vars
-import { renderPlan } from './plan.js';
+import { renderPlan, recordModal } from './plan.js';
 import { nameKey, cleanName } from './names.js';
 import { guessDir } from './stocks.js';
 import { KINDS, readExport, mergeParts, toDataset, uploadDataset, loadDataset, clearDatasetCache, mfFactsRows, niftyPricesFrom, saveMfFacts, autoMap, keyFieldsFor, defaultLabel, getColumnMap, saveColumnMap } from './tickertape.js';
@@ -39,6 +39,7 @@ const ICONS = {
   household: '<path d="M3 11l9-7 9 7v9a1 1 0 01-1 1h-5v-6H9v6H4a1 1 0 01-1-1z"/>',
   site: '<path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6z"/><path d="M9 12l2 2 4-4"/>',
 };
+const mine = () => esc(possessive(S.me.name));
 const routes = () => (S.me?.siteAdmin ? [...ROUTES, ['site', 'Site admin']] : ROUTES);
 const ROUTES = [['setup', 'Setup'], ['funds', 'Fund dashboard'], ['stocks-in', 'Indian stocks'], ['stocks-us', 'US stocks'], ['plan', 'Monthly plan'], ['portfolio', 'Portfolio'], ['data', 'Data'], ['household', 'Household']];
 
@@ -175,7 +176,7 @@ function renderSetup(main) {
       <td class="r amt" data-slot="${k}"></td><td class="nm">${pick}</td></tr>`;
   }).join('');
   main.innerHTML = `
-    <div class="page-head"><div><h2>Setup</h2><p>Your monthly amount, how it's split, and which fund houses to leave out.</p></div></div>
+    <div class="page-head"><div><h2>${mine()} setup</h2><p>Your monthly amount, how it's split, and which fund houses to leave out.</p></div></div>
     <div class="card">
       <h3>Monthly investment</h3><p class="sub">The total you invest each month across all slots.</p>
       <div class="row" style="max-width:420px"><div><label class="f" for="total">Monthly total (₹)</label>
@@ -271,7 +272,7 @@ function renderFunds(main) {
   const isAdmin = S.me.role === 'admin';
 
   main.innerHTML = `
-    <div class="page-head"><div><h2>Fund dashboard</h2><p>NAV data refreshed ${esc(lastRefresh)} · ${esc(ttInfo)}</p></div><div class="grow"></div>
+    <div class="page-head"><div><h2>${mine()} fund dashboard</h2><p>NAV data refreshed ${esc(lastRefresh)} · ${esc(ttInfo)}</p></div><div class="grow"></div>
       ${isAdmin ? '<a class="btn" href="#/data">Load Tickertape data</a>' : ''}</div>
     <div class="seg" id="slottabs" style="margin-bottom:16px">${FUND_SLOTS.map((k) => `<button data-k="${k}" class="${k === slot ? 'on' : ''}">${SLOTS[k].label}</button>`).join('')}</div>
     ${!S.funds.length ? `<div class="card"><h3>No fund data yet</h3><p class="sub">Run the "Refresh fund data" GitHub Action once (see the README). Data then refreshes twice a day on its own.</p></div>` : ''}
@@ -506,7 +507,7 @@ async function renderPortfolio(main) {
   for (const t of tx) months[t.month] = (months[t.month] || 0) + t.amount;
 
   main.innerHTML = `
-    <div class="page-head"><div><h2>Portfolio</h2><p>${combined ? `Household total for ${viewable.map((m) => (m.id === S.me.id ? 'you' : esc(m.name))).join(', ')}` : portfolioMember === S.me.id ? 'Your holdings' : esc(data.member.name) + "'s holdings"}, valued at the latest NAVs and prices.</p></div><div class="grow"></div>
+    <div class="page-head"><div><h2>${combined ? `${esc(S.me.householdName)} household portfolio` : portfolioMember === S.me.id ? `${mine()} portfolio` : `${esc(possessive(data.member.name))} portfolio`}</h2><p>${combined ? `Household total for ${viewable.map((m) => (m.id === S.me.id ? 'you' : esc(m.name))).join(', ')}` : portfolioMember === S.me.id ? 'Your holdings' : esc(data.member.name) + "'s holdings"}, valued at the latest NAVs and prices.</p></div><div class="grow"></div>
       ${viewable.length > 1 ? `<div><label class="f">Showing</label><select class="input" id="pmem">${viewable.map((m) => `<option value="${m.id}" ${m.id === portfolioMember ? 'selected' : ''}>${m.id === S.me.id ? 'Me' : esc(m.name)}</option>`).join('')}<option value="household" ${combined ? 'selected' : ''}>Household (everyone shown here)</option></select></div>` : ''}</div>
     ${combined && hidden.length ? `<p class="note">Not included because they keep their portfolio private: ${hidden.map((m) => esc(m.name)).join(', ')}.</p>` : ''}
     <div class="stats">
@@ -531,8 +532,46 @@ async function renderPortfolio(main) {
       <div class="tablewrap"><table class="t"><thead><tr><th>Slot</th><th>Holding</th><th class="r">Units</th><th class="r">Avg cost</th><th class="r">Invested</th><th class="r">Price now</th><th class="r">Value</th><th class="r">Gain</th><th class="r">Gain %</th></tr></thead>
       <tbody>${holdings.sort((a, b) => b.value - a.value).map((h) => `<tr><td>${SLOTS[h.slot]?.short || h.slot}</td><td class="nm">${esc(h.name)}</td><td class="r">${num(h.units, 4)}</td><td class="r">${num(h.invested / h.units, 2)}</td><td class="r">${inr(h.invested)}</td><td class="r">${h.priced ? num(h.price, 2) : '<span class="warn" title="No current price; valued at cost">–</span>'}</td><td class="r">${inr(h.value)}</td><td class="r ${signCls(h.value - h.invested)}">${inr(h.value - h.invested)}</td><td class="r ${signCls(h.value - h.invested)}">${pct((h.value - h.invested) / h.invested * 100)}</td></tr>`).join('') || '<tr><td colspan="9" class="muted">Record purchases on the Monthly plan page to see them here.</td></tr>'}</tbody>
       ${holdings.length ? `<tfoot><tr><td colspan="4">Total</td><td class="r">${inr(invested)}</td><td></td><td class="r">${inr(value)}</td><td class="r ${signCls(gain)}">${inr(gain)}</td><td class="r ${signCls(gain)}">${invested ? pct(gain / invested * 100) : '–'}</td></tr></tfoot>` : ''}</table></div>
-      <p class="note">Mutual funds and ETFs are valued at the latest NAV from AMFI; Nifty 50 stocks at the prices last updated; US stocks at the last Tickertape price × your rupee–dollar rate.</p></div>`;
+      <p class="note">Mutual funds and ETFs are valued at the latest NAV from AMFI; Nifty 50 stocks at the prices last updated; US stocks at the last Tickertape price × your rupee–dollar rate.</p></div>
+    ${tx.length ? purchasesCard(tx, !combined && portfolioMember === S.me.id, combined) : ''}`;
   document.getElementById('pmem')?.addEventListener('change', (e) => { portfolioMember = e.target.value; renderPortfolio(main); });
+  wirePurchases(main, tx, () => renderPortfolio(main));
+}
+
+// Every purchase, newest first, filterable by month and section. Your own can be edited or deleted.
+function purchasesCard(tx, editable, showWho) {
+  const ms = [...new Set(tx.map((t) => t.month))].sort().reverse();
+  const slots = [...new Set(tx.map((t) => t.slot))];
+  return `<div class="card" id="pcard"><details><summary style="cursor:pointer"><h3 style="display:inline">All purchases</h3> <span class="muted">(${tx.length})${editable ? ' · edit or delete any of them here' : ''}</span></summary>
+    <div class="row tight" style="margin:10px 0;flex-wrap:wrap"><div style="flex:0 0 180px"><label class="f">Month</label><select class="input" id="pfm"><option value="">All months</option>${ms.map((m) => `<option value="${m}">${esc(monthLabel(m))}</option>`).join('')}</select></div>
+      <div style="flex:0 0 180px"><label class="f">Section</label><select class="input" id="pfs"><option value="">All sections</option>${slots.map((k) => `<option value="${k}">${SLOTS[k]?.short || esc(k)}</option>`).join('')}</select></div>
+      <div style="flex:1 1 200px"><label class="f">Search</label><input class="input" id="pfq" placeholder="Fund or stock name"></div></div>
+    <div class="tablewrap" style="max-height:60vh"><table class="t"><thead><tr><th>Date</th><th>Month</th>${showWho ? '<th>Member</th>' : ''}<th>Section</th><th>Bought</th><th class="r">Units</th><th class="r">Price</th><th class="r">Amount</th><th>Note</th>${editable ? '<th></th>' : ''}</tr></thead>
+    <tbody>${[...tx].sort((a, b) => b.tradeDate.localeCompare(a.tradeDate)).map((t) => `<tr data-m="${t.month}" data-s="${t.slot}" data-q="${esc(String(t.assetName).toLowerCase())}">
+      <td>${esc(t.tradeDate)}</td><td>${esc(shortMonthLabel(t.month))}</td>${showWho ? `<td>${esc(t.who || '')}</td>` : ''}<td>${SLOTS[t.slot]?.short || esc(t.slot)}</td><td class="nm">${esc(t.assetName)}</td>
+      <td class="r">${num(t.units, 4)}</td><td class="r">${num(t.price, 4)}</td><td class="r">${inr(t.amount, 2)}</td><td class="nm">${esc(t.note || '')}</td>
+      ${editable ? `<td style="white-space:nowrap"><button class="btn small" data-pedit="${t.id}">Edit</button> <button class="btn small danger" data-pdel="${t.id}">Delete</button></td>` : ''}</tr>`).join('')}</tbody></table></div></details></div>`;
+}
+const shortMonthLabel = (m) => `${monthLabel(m).slice(0, 3)} ${m.slice(0, 4)}`;
+
+function wirePurchases(main, tx, done) {
+  const card = main.querySelector('#pcard');
+  if (!card) return;
+  const filter = () => {
+    const m = card.querySelector('#pfm').value, sl = card.querySelector('#pfs').value, q = card.querySelector('#pfq').value.trim().toLowerCase();
+    card.querySelectorAll('tbody tr').forEach((tr) => { tr.hidden = (m && tr.dataset.m !== m) || (sl && tr.dataset.s !== sl) || (q && !tr.dataset.q.includes(q)); });
+  };
+  card.querySelector('#pfm').onchange = card.querySelector('#pfs').onchange = filter;
+  card.querySelector('#pfq').oninput = filter;
+  card.querySelectorAll('[data-pedit]').forEach((b) => (b.onclick = () => {
+    const t = tx.find((x) => x.id === b.dataset.pedit);
+    recordModal({ ...t, priceLabel: t.slot === 'usstocks' ? 'Price paid per share (₹)' : null }, done, t.id);
+  }));
+  card.querySelectorAll('[data-pdel]').forEach((b) => (b.onclick = async () => {
+    const t = tx.find((x) => x.id === b.dataset.pdel);
+    if (!confirm(`Delete the purchase of ${num(t.units, 4)} ${t.assetName} on ${t.tradeDate}? This can't be undone.`)) return;
+    try { await api('DELETE', `/api/transactions/${t.id}`); toast('Purchase deleted'); done(); } catch (e) { toast(e.message); }
+  }));
 }
 
 // ---------------------------------------------------------------- DATA (Tickertape)
@@ -548,7 +587,7 @@ async function renderData(main) {
     return `<tr><td><b>${KINDS[k]}</b></td><td>${m ? esc(when(m)) + (m.by ? ` <span class="muted">by ${esc(m.by)}</span>` : '') : '<span class="warn">Not loaded</span>'}</td><td class="r">${m ? num(m.rows, 0) : '–'}</td><td class="r">${m ? num(m.cols, 0) : '–'}</td><td class="nm">${m ? esc(m.files || '') : ''}${miss.length ? `<span class="a warn">Missing key fields: ${esc(miss.join(', '))}</span>` : ''}</td></tr>`;
   };
   main.innerHTML = `
-    <div class="page-head"><div><h2>Data</h2><p>Load your Tickertape screener exports for mutual funds, Indian stocks and US stocks.</p></div></div>
+    <div class="page-head"><div><h2>${mine()} data</h2><p>Load your Tickertape screener exports for mutual funds, Indian stocks and US stocks. Shared with everyone in ${esc(S.me.householdName)}.</p></div></div>
     <div class="card"><h3>What's loaded</h3>${dsError ? `<p class="err">${esc(dsError)}</p>` : ''}
       <div class="tablewrap"><table class="t"><thead><tr><th>Dataset</th><th>Loaded</th><th class="r">Rows</th><th class="r">Columns</th><th>Files</th></tr></thead>
       <tbody>${['mf', 'in', 'us'].map(status).join('')}</tbody></table></div>
@@ -740,7 +779,7 @@ async function renderHousehold(main) {
   const { household, members } = await api('GET', '/api/household');
   const admin = S.me.role === 'admin';
   main.innerHTML = `
-    <div class="page-head"><div><h2>Household</h2><p>${esc(household.name)}</p></div></div>
+    <div class="page-head"><div><h2>${mine()} household</h2><p>${esc(household.name)}</p></div></div>
     <div class="grid2">
       <div class="card"><h3>Your dashboard sharing</h3><p class="sub">When on, other approved members of your household can see your portfolio. Your setup and purchases stay yours either way.</p>
         <label class="toggle"><input type="checkbox" id="share" ${S.me.shareDashboard ? 'checked' : ''}>Share my portfolio with my household</label></div>
@@ -826,7 +865,7 @@ async function renderSiteAdmin(main) {
       : h.status === 'active' ? `<button class="btn small danger" data-h="${h.id}" data-a="suspend">Suspend</button>` : `<button class="btn small" data-h="${h.id}" data-a="reactivate">Reactivate</button>`}</td></tr>`;
   const head = '<thead><tr><th>Household</th><th>Started by</th><th>Email</th><th class="r">Members</th><th>Created</th><th>Status</th><th></th></tr></thead>';
   main.innerHTML = `
-    <div class="page-head"><div><h2>Site admin</h2><p>Every new household waits here for your approval.</p></div></div>
+    <div class="page-head"><div><h2>${mine()} site admin</h2><p>Every new household waits here for your approval.</p></div></div>
     <div class="card"><h3>Waiting for approval (${pending.length})</h3>
       ${pending.length ? `<div class="tablewrap"><table class="t">${head}<tbody>${pending.map(row).join('')}</tbody></table></div>` : '<p class="note">Nothing waiting.</p>'}</div>
     <div class="card"><h3>All households (${households.length})</h3><div class="tablewrap"><table class="t">${head}<tbody>${households.filter((h) => h.status !== 'pending').map(row).join('')}</tbody></table></div>
@@ -939,7 +978,7 @@ function renderAuth() {
 
 function renderPending() {
   app.innerHTML = `<div class="auth"><div class="hero"><h1>VITHAI</h1></div><div class="panel"><div style="max-width:380px">
-    <h2>Waiting for approval</h2>${S.me.householdStatus === 'pending'
+    <h2>Hi ${esc(S.me.name)}, you're waiting for approval</h2>${S.me.householdStatus === 'pending'
     ? `<p>Your new household <b>${esc(S.me.householdName)}</b> has been sent to the site admin. You can start as soon as it's approved${S.me.email ? `; we'll email ${esc(S.me.email)}` : ''}.</p>`
     : S.me.householdStatus !== 'active' ? `<p>The household <b>${esc(S.me.householdName)}</b> is ${esc(S.me.householdStatus)}. Contact the site admin.</p>`
     : `<p>Your request to join <b>${esc(S.me.householdName)}</b> has been sent. The household admin needs to approve it before you can start.</p>`}
