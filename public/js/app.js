@@ -508,7 +508,8 @@ async function renderPortfolio(main) {
 
   main.innerHTML = `
     <div class="page-head"><div><h2>${combined ? `${esc(S.me.householdName)} household portfolio` : portfolioMember === S.me.id ? `${mine()} portfolio` : `${esc(possessive(data.member.name))} portfolio`}</h2><p>${combined ? `Household total for ${viewable.map((m) => (m.id === S.me.id ? 'you' : esc(m.name))).join(', ')}` : portfolioMember === S.me.id ? 'Your holdings' : esc(data.member.name) + "'s holdings"}, valued at the latest NAVs and prices.</p></div><div class="grow"></div>
-      ${viewable.length > 1 ? `<div><label class="f">Showing</label><select class="input" id="pmem">${viewable.map((m) => `<option value="${m.id}" ${m.id === portfolioMember ? 'selected' : ''}>${m.id === S.me.id ? 'Me' : esc(m.name)}</option>`).join('')}<option value="household" ${combined ? 'selected' : ''}>Household (everyone shown here)</option></select></div>` : ''}</div>
+      ${viewable.length > 1 ? `<div><label class="f">Showing</label><select class="input" id="pmem">${viewable.map((m) => `<option value="${m.id}" ${m.id === portfolioMember ? 'selected' : ''}>${m.id === S.me.id ? 'Me' : esc(m.name)}</option>`).join('')}<option value="household" ${combined ? 'selected' : ''}>Household (everyone shown here)</option></select></div>` : ''}
+      <button class="btn" id="pexport" style="flex:0 0 auto;align-self:flex-end">Export…</button></div>
     ${combined && hidden.length ? `<p class="note">Not included because they keep their portfolio private: ${hidden.map((m) => esc(m.name)).join(', ')}.</p>` : ''}
     <div class="stats">
       <div class="stat"><div class="k">Invested</div><div class="v">${inr(invested)}</div><div class="d">${tx.length} purchases</div></div>
@@ -536,6 +537,121 @@ async function renderPortfolio(main) {
     ${tx.length ? purchasesCard(tx, !combined && portfolioMember === S.me.id, combined) : ''}`;
   document.getElementById('pmem')?.addEventListener('change', (e) => { portfolioMember = e.target.value; renderPortfolio(main); });
   wirePurchases(main, tx, () => renderPortfolio(main));
+  document.getElementById('pexport').onclick = () => exportModal(viewable, combined ? 'household' : portfolioMember);
+}
+
+// ---------------------------------------------------------------- portfolio export
+// One row per purchase (who, when, how much, what it cost, what it's worth now, profit), plus
+// holdings and a summary. Purchase prices are as entered; current prices are the latest available.
+async function exportRows(viewable, scope) {
+  const members = scope === 'household' ? viewable : viewable.filter((m) => m.id === scope);
+  const people = await Promise.all(members.map((m) => api('GET', `/api/members/${m.id}/portfolio`).then((d) => ({ ...d, member: { ...d.member, username: m.username } }))));
+  let usPrice = () => null;
+  if (people.some((p) => p.transactions.some((t) => t.slot === 'usstocks'))) { try { usPrice = usPriceLookup(await loadDataset('us')); } catch { /* valued at cost */ } }
+  const niftyAsOf = (S.nifty[0]?.updated_at || '').slice(0, 10);
+  const current = (t, rate) => {
+    if (t.slot === 'nifty50') { const n = S.nifty.find((x) => x.symbol === t.assetId); return n?.ltp ? { price: n.ltp, asOf: niftyAsOf, source: 'Nifty 50 prices' } : null; }
+    if (t.slot === 'usstocks') { const p = usPrice(t.assetId); return p && rate ? { price: p * rate, asOf: '', source: `US stocks upload × ₹${rate}/$` } : null; }
+    const f = S.funds.find((x) => x.code === t.assetId);
+    return f?.nav ? { price: f.nav, asOf: f.navDate || '', source: 'AMFI NAV' } : null;
+  };
+  const r2 = (x) => (x === null || x === undefined || !isFinite(x) ? null : Math.round(x * 100) / 100);
+  const now = new Date(today());
+  const purchases = [];
+  for (const p of people) {
+    const rate = p.settings.usdInr || S.settings.usdInr;
+    for (const t of p.transactions) {
+      const c = current(t, rate);
+      const value = c ? t.units * c.price : null;
+      const profit = value === null ? null : value - t.amount;
+      const days = Math.max(0, Math.round((now - new Date(t.tradeDate)) / 86400000));
+      purchases.push({
+        Member: p.member.name, Username: p.member.username || '', 'Date bought': t.tradeDate, 'Plan month': t.month,
+        Section: SLOTS[t.slot]?.label || t.slot, 'Fund / stock': t.slot === 'nifty50' ? (S.nifty.find((x) => x.symbol === t.assetId)?.name || t.assetName) : t.assetName, 'Code / symbol': t.assetId,
+        Quantity: t.units, 'Buy price (NAV / per share)': t.price, 'Total buy cost (₹)': r2(t.amount),
+        'Current price': c ? r2(c.price * 10000) / 10000 : null, 'Price as of': c?.asOf || '', 'Price source': c ? c.source : 'No current price (valued at cost)',
+        'Current value (₹)': r2(value), 'Profit (₹)': r2(profit), 'Profit %': profit === null || !t.amount ? null : r2(profit / t.amount * 100),
+        'Days held': days, 'Annualised return %': profit === null || days < 30 || !t.amount ? null : r2((Math.pow(value / t.amount, 365 / days) - 1) * 100),
+        Note: t.note || '',
+      });
+    }
+  }
+  purchases.sort((a, b) => a.Member.localeCompare(b.Member) || a['Date bought'].localeCompare(b['Date bought']));
+  const hold = new Map();
+  for (const r of purchases) {
+    const k = `${r.Member}|${r['Code / symbol']}`;
+    const h = hold.get(k) || { Member: r.Member, Section: r.Section, 'Fund / stock': r['Fund / stock'], 'Code / symbol': r['Code / symbol'], Purchases: 0, 'First bought': r['Date bought'], 'Last bought': r['Date bought'], Quantity: 0, 'Total buy cost (₹)': 0, 'Current price': r['Current price'], 'Current value (₹)': 0, priced: r['Current price'] !== null };
+    h.Purchases++; h.Quantity += r.Quantity; h['Total buy cost (₹)'] += r['Total buy cost (₹)']; h['Last bought'] = r['Date bought'];
+    h['Current value (₹)'] += r['Current value (₹)'] ?? r['Total buy cost (₹)'];
+    hold.set(k, h);
+  }
+  const holdings = [...hold.values()].map(({ priced, ...h }) => ({
+    ...h, Quantity: r2(h.Quantity * 10000) / 10000, 'Avg buy price': r2(h['Total buy cost (₹)'] / h.Quantity), 'Total buy cost (₹)': r2(h['Total buy cost (₹)']),
+    'Current value (₹)': r2(h['Current value (₹)']), 'Profit (₹)': priced ? r2(h['Current value (₹)'] - h['Total buy cost (₹)']) : null,
+    'Profit %': priced && h['Total buy cost (₹)'] ? r2((h['Current value (₹)'] - h['Total buy cost (₹)']) / h['Total buy cost (₹)'] * 100) : null,
+  }));
+  const sumUp = (rows, label) => {
+    const cost = rows.reduce((a, r) => a + r['Total buy cost (₹)'], 0), val = rows.reduce((a, r) => a + (r['Current value (₹)'] ?? r['Total buy cost (₹)']), 0);
+    const flows = rows.map((r) => ({ date: r['Date bought'], amount: -r['Total buy cost (₹)'] })).sort((a, b) => a.date.localeCompare(b.date));
+    if (flows.length) flows.push({ date: today(), amount: val });
+    const irr = xirr(flows);
+    return { Member: label, Purchases: rows.length, 'Total buy cost (₹)': r2(cost), 'Current value (₹)': r2(val), 'Profit (₹)': r2(val - cost), 'Profit %': cost ? r2((val - cost) / cost * 100) : null, 'XIRR %': irr === null ? null : r2(irr) };
+  };
+  const summary = people.map((p) => sumUp(purchases.filter((r) => r.Member === p.member.name), p.member.name));
+  if (people.length > 1) summary.push(sumUp(purchases, 'Household total'));
+  const label = scope === 'household' ? (/household$/i.test(S.me.householdName) ? S.me.householdName : `${S.me.householdName} household`) : people[0]?.member.name || 'portfolio';
+  return { purchases, holdings, summary, label };
+}
+
+const FORMATS = {
+  xlsx: { label: 'Excel workbook (.xlsx): purchases, holdings and summary sheets', ext: 'xlsx' },
+  ods: { label: 'OpenDocument spreadsheet (.ods): LibreOffice, Google Sheets; same three sheets', ext: 'ods' },
+  csv: { label: 'CSV (.csv): one row per purchase', ext: 'csv' },
+  tsv: { label: 'Tab-separated (.tsv): one row per purchase, pastes cleanly into any spreadsheet', ext: 'tsv' },
+  json: { label: 'JSON (.json): purchases, holdings and summary, for other apps', ext: 'json' },
+};
+
+function exportModal(viewable, current) {
+  const opts = [...viewable.map((m) => [m.id, m.id === S.me.id ? `Me (${S.me.name})` : m.name]), ...(viewable.length > 1 ? [['household', `Whole household (${viewable.length} members who share)`]] : [])];
+  openModal(`<h3>Export portfolio</h3>
+    <p class="note">Every purchase with who bought it, the date, quantity, buy price, total cost, current price, current value and profit, plus holdings and a summary. Buy prices are what you entered; current prices are the latest available.</p>
+    <div style="display:grid;gap:12px;margin-top:8px">
+      <div><label class="f">Whose portfolio</label><select class="input" id="exs">${opts.map(([v, l]) => `<option value="${v}" ${v === current ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></div>
+      <div><label class="f">Format</label>${Object.entries(FORMATS).map(([k, f], i) => `<label class="toggle" style="display:flex;margin:4px 0"><input type="radio" name="exf" value="${k}" ${i === 0 ? 'checked' : ''}> ${esc(f.label)}</label>`).join('')}</div>
+    </div>
+    ${viewable.length < 2 ? '<p class="note">Household export appears here once other members share their portfolio with the household.</p>' : ''}
+    <div class="row" style="justify-content:flex-end;margin-top:14px"><button class="btn" data-close style="flex:0 0 auto">Cancel</button><button class="btn primary" id="exgo" style="flex:0 0 auto">Download</button></div>`, (root, close) => {
+    root.querySelector('#exgo').onclick = async () => {
+      const btn = root.querySelector('#exgo'); btn.disabled = true; btn.textContent = 'Preparing…';
+      try {
+        const fmt = root.querySelector('input[name=exf]:checked').value;
+        const d = await exportRows(viewable, root.querySelector('#exs').value);
+        if (!d.purchases.length) { toast('No purchases to export yet.'); btn.disabled = false; btn.textContent = 'Download'; return; }
+        const base = `vithai-${d.label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}-portfolio-${today()}`;
+        if (fmt === 'json') download(`${base}.json`, JSON.stringify({ exported: new Date().toISOString(), portfolio: d.label, summary: d.summary, holdings: d.holdings, purchases: d.purchases }, null, 2), 'application/json');
+        else {
+          const XLSX = await waitForXLSX();
+          if (fmt === 'csv' || fmt === 'tsv') {
+            const text = XLSX.utils.sheet_to_csv(XLSX.utils.json_to_sheet(d.purchases), fmt === 'tsv' ? { FS: '\t' } : {});
+            download(`${base}.${fmt}`, '\ufeff' + text, fmt === 'csv' ? 'text/csv' : 'text/tab-separated-values'); // BOM so Excel reads ₹ correctly
+          } else {
+            const wb = XLSX.utils.book_new();
+            const sheet = (rows, name) => { const ws = XLSX.utils.json_to_sheet(rows); ws['!cols'] = Object.keys(rows[0] || {}).map((k) => ({ wch: Math.min(40, Math.max(k.length, ...rows.map((r) => String(r[k] ?? '').length)) + 2) })); XLSX.utils.book_append_sheet(wb, ws, name); };
+            sheet(d.summary, 'Summary'); sheet(d.holdings, 'Holdings'); sheet(d.purchases, 'Purchases');
+            XLSX.writeFile(wb, `${base}.${fmt}`, { bookType: fmt });
+          }
+        }
+        close(); toast(`Exported ${d.purchases.length} purchases`);
+      } catch (e) { toast(e.message); btn.disabled = false; btn.textContent = 'Download'; }
+    };
+  });
+}
+
+function download(name, text, type) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type: `${type};charset=utf-8` }));
+  a.download = name; document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
 }
 
 // Every purchase, newest first, filterable by month and section. Your own can be edited or deleted.
