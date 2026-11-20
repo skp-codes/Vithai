@@ -1,6 +1,7 @@
 // Indian and US stock dashboards, built from the Tickertape stock screener exports.
 import { esc, num, toast, openModal, possessive } from './util.js';
 import { metricPicker, guessGroup } from './picker.js';
+import { stockScope, viewIdFor, filterById, filterBarHTML, filterActionsHTML, wireFilterBar } from './filters.js';
 import { rankRows } from './ranking.js';
 import { loadDataset, companyKey, keyFieldsFor } from './tickertape.js';
 
@@ -45,12 +46,16 @@ export async function renderStocks(main, mkt, ctx) {
   const niftyKeys = new Set((S.nifty || []).map((n) => companyKey(n.name)));
   const niftySymbols = new Set((S.nifty || []).map((n) => n.symbol));
 
-  const saved = S.settings.stockCriteria?.[mkt] || {};
+  const scope = stockScope(mkt);
+  const viewId = viewIdFor(S, scope);
+  const saved = viewId === 'vithai' ? {} : filterById(S, scope, viewId)?.cfg || {};
   const cfg = {
-    criteria: saved.criteria || defaultCriteria(ds, numCols).criteria,
+    criteria: (saved.criteria || defaultCriteria(ds, numCols).criteria).map((c) => [...c]),
     topN: saved.topN ?? 500,
-    sectors: saved.sectors || [],
+    sectors: [...(saved.sectors || [])],
   };
+  const base = JSON.stringify(cfg);
+  const dirty = () => JSON.stringify(cfg) !== base;
   const sectors = sectorCol ? [...new Set(ds.objects.map((o) => o[sectorCol]).filter(Boolean))].sort() : [];
   const usable = () => cfg.criteria.filter(([l]) => numCols.includes(l));
   const unavailable = () => cfg.criteria.filter(([l]) => !numCols.includes(l));
@@ -94,11 +99,8 @@ export async function renderStocks(main, mkt, ctx) {
     const panel = document.getElementById('scrit');
     const cover = (c) => { const uni = universe(); return uni.length ? uni.filter((o) => typeof o[c] === 'number').length / uni.length : 0; };
     const gone = unavailable();
-    const def = { criteria: defaultCriteria(ds, numCols).criteria, topN: 500, sectors: [] };
-    const saved = !!S.settings.stockCriteria?.[mkt];
-    const status = () => (JSON.stringify([cfg.criteria, cfg.topN, [...cfg.sectors].sort()]) === JSON.stringify([def.criteria, def.topN, []])
-      ? '<span class="badge good">Vithai default</span>' : `<span class="badge gold">${saved ? 'Your saved criteria' : 'Custom · not saved yet'}</span>`);
-    panel.innerHTML = `<div class="sechead" style="margin-bottom:4px"><div><h3 style="margin:0">Ranking criteria</h3></div><span id="critstatus">${status()}</span></div><p class="sub">Each stock's score is the weighted average of its percentile on the metrics you add, within the universe you set.</p>
+    delete panel.dataset.fstate;
+    panel.innerHTML = `<h3>Ranking criteria</h3><div id="fbarwrap"></div><p class="sub">Each stock's score is the weighted average of its percentile on the metrics you add, within the universe you set.</p>
       ${gone.length ? `<div class="card" style="background:var(--gold-soft);border-color:transparent;padding:12px 14px"><b>Not in your current data</b><p class="note" style="margin:4px 0 8px">These saved metrics aren't in the latest import (renamed or missing), so they're left out of the score.</p>
         ${gone.map(([l], i) => `<div class="row" style="align-items:center;margin-bottom:6px"><span style="flex:1 1 100%;font-size:12.5px">${esc(l)}</span>
           <select class="input" data-swap="${i}" style="padding:3px 6px;font-size:12px"><option value="">Use another column instead…</option>${numCols.map((c) => `<option>${esc(c)}</option>`).join('')}</select>
@@ -111,7 +113,7 @@ export async function renderStocks(main, mkt, ctx) {
       </div>
       <div class="crit-group">Scoring on</div>
       <div id="mpick"></div>
-      <div class="row tight" style="margin-top:14px"><button class="btn primary" id="ssave">Save criteria</button><button class="btn ghost" id="sreset">Reset to Vithai default</button></div>`;
+      <div id="factwrap"></div>`;
     const picker = metricPicker(panel.querySelector('#mpick'), {
       items: numCols.map((c) => ({ key: c, label: c, group: guessGroup(c) })),
       selected: usable().map(([l, w, d]) => ({ key: l, w, d: d || guessDir(l) })),
@@ -119,7 +121,16 @@ export async function renderStocks(main, mkt, ctx) {
       cover,
       onChange: (sel) => { const g = unavailable(); cfg.criteria = [...sel.map((x) => [x.key, x.w, x.d]), ...g]; drawTable(); upd(); },
     });
-    const upd = () => { document.getElementById('critstatus').innerHTML = status(); };
+    const upd = () => {
+      // only redraw when the state shown changes, so a click isn't lost to a redraw mid-click
+      const bar = filterBarHTML(S, scope, dirty()), acts = filterActionsHTML(S, scope, dirty());
+      if (panel.dataset.fstate === bar + acts) return;
+      panel.dataset.fstate = bar + acts;
+      panel.querySelector('#fbarwrap').innerHTML = bar;
+      panel.querySelector('#factwrap').innerHTML = acts;
+      wireFilterBar(panel, S, { scope, saveSettings, cfg: () => JSON.parse(JSON.stringify(cfg)), dirty, rerender: () => renderStocks(main, mkt, ctx), pageLabel: LABEL[mkt] });
+    };
+    upd();
     document.getElementById('clearfilters').onclick = () => { cfg.topN = 0; cfg.sectors = []; drawCriteria(); drawTable(); };
     panel.querySelector('#topn')?.addEventListener('change', (e) => { cfg.topN = Number(e.target.value) || 0; picker.refresh(); drawTable(); upd(); });
     panel.querySelectorAll('[data-drop]').forEach((b) => (b.onclick = () => { const l = gone[+b.dataset.drop][0]; cfg.criteria = cfg.criteria.filter(([x]) => x !== l); drawCriteria(); drawTable(); }));
@@ -131,12 +142,6 @@ export async function renderStocks(main, mkt, ctx) {
     }));
     panel.querySelector('#secsel')?.addEventListener('change', (e) => { if (e.target.value && !cfg.sectors.includes(e.target.value)) cfg.sectors.push(e.target.value); drawCriteria(); drawTable(); });
     panel.querySelectorAll('[data-sec]').forEach((b) => (b.onclick = () => { cfg.sectors.splice(+b.dataset.sec, 1); drawCriteria(); drawTable(); }));
-    document.getElementById('ssave').onclick = async () => { await saveSettings({ stockCriteria: { ...S.settings.stockCriteria, [mkt]: { criteria: cfg.criteria, topN: cfg.topN, sectors: cfg.sectors } } }, 'Criteria saved'); drawCriteria(); };
-    document.getElementById('sreset').onclick = async () => {
-      const sc = { ...S.settings.stockCriteria }; delete sc[mkt];
-      await saveSettings({ stockCriteria: sc }, 'Back to the Vithai default');
-      cfg.criteria = defaultCriteria(ds, numCols).criteria; cfg.topN = 500; cfg.sectors = []; drawCriteria(); drawTable();
-    };
   }
 
 

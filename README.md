@@ -161,3 +161,7 @@ Sections run in this order: Nifty 50, large cap, mid/small cap, debt, gold, inte
 
 On the Fund dashboard and the stock pages, the metrics in your score are listed as compact rows (direction, weight, remove). **+ Add metrics** opens a searchable list of everything else, grouped (returns, valuation, profitability, risk and so on), so long Tickertape column lists stay out of the way until you need them.
 
+### My ranking filters
+
+Save named sets of filters and metrics ("Save as new filter…" on any ranking panel, or **+ New filter** in Setup → My ranking filters). Each filter belongs to one page: a fund section (large cap, mid/small cap, debt, international funds, gold), Indian stocks (Nifty 50) or US stocks (international), and is only offered there. Pick each page's default (★) in Setup or with "Make this my default"; your plan picks funds using each section's default. Filters can be edited (change it, then Save changes), renamed and deleted from the page or from Setup. Criteria saved by older versions become a filter called "My criteria".
+

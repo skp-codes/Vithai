@@ -4,6 +4,7 @@ import { METRICS, SLOTS, DEFAULT_CRITERIA, rankFunds } from './ranking.js';
 import { renderStocks, usPriceLookup } from './stocks.js'; // eslint-disable-line no-unused-vars
 import { renderPlan, recordModal } from './plan.js';
 import { metricPicker, guessGroup } from './picker.js';
+import { fundScope, stockScope, filtersFor, filterById, defaultIdFor, viewIdFor, setViewing, filterBarHTML, filterActionsHTML, wireFilterBar, nameModal, patchFilters, patchDefault, newFilterId, migrateLegacy, filterName } from './filters.js';
 import { nameKey, cleanName } from './names.js';
 import { guessDir } from './stocks.js';
 import { KINDS, readExport, mergeParts, toDataset, uploadDataset, loadDataset, clearDatasetCache, mfFactsRows, niftyPricesFrom, saveMfFacts, autoMap, keyFieldsFor, defaultLabel, getColumnMap, saveColumnMap } from './tickertape.js';
@@ -63,6 +64,7 @@ async function loadData() {
   S.funds = f.funds.map(flattenFacts);
   S.meta = f.meta || {};
   S.nifty = n.stocks;
+  await migrateLegacy(S, saveSettings);
   await attachTickertape();
   S.loaded = true;
 }
@@ -133,15 +135,54 @@ function renderShell() {
   if (S.me.mustChangePassword) promptPasswordChange(true);
 }
 
+// ---------------------------------------------------------------- my ranking filters (Setup)
+const FILTER_PAGES = () => [
+  ...FUND_SLOTS.map((slot) => ({ scope: fundScope(slot), label: `${SLOTS[slot].label} funds`, go: () => { S.fundsTab = slot; location.hash = '#/funds'; }, base: () => slotConfig(slot, 'vithai') })),
+  { scope: stockScope('in'), label: 'Indian stocks (Nifty 50)', go: () => { location.hash = '#/stocks-in'; }, base: () => ({}) },
+  { scope: stockScope('us'), label: 'US stocks (international)', go: () => { location.hash = '#/stocks-us'; }, base: () => ({}) },
+];
+function drawMyFilters(card) {
+  const pages = FILTER_PAGES();
+  card.innerHTML = `<h3>My ranking filters</h3>
+    <p class="sub">Name your own sets of filters and metrics, and choose which one each page uses by default (★). Filters belong to one page: a Nifty 50 filter is only offered on Indian stocks, an international one only on that page, and so on. Your plan picks funds using each section's default. Changes here save straight away.</p>
+    <div class="tablewrap"><table class="t"><thead><tr><th>Page</th><th style="min-width:200px">Default filter</th><th>My filters</th><th></th></tr></thead><tbody>
+    ${pages.map((p, i) => { const mine = filtersFor(S, p.scope), def = defaultIdFor(S, p.scope); return `<tr>
+      <td><b>${esc(p.label)}</b></td>
+      <td><select class="input" data-def="${i}"><option value="vithai" ${def === 'vithai' ? 'selected' : ''}>Vithai default</option>${mine.map((f) => `<option value="${esc(f.id)}" ${def === f.id ? 'selected' : ''}>${esc(f.name)}</option>`).join('')}</select></td>
+      <td style="white-space:normal">${mine.length ? `<div class="flist">${mine.map((f) => `<div class="fitem">${def === f.id ? '<span title="Default" class="star">★</span>' : ''}<span class="fname">${esc(f.name)}</span>
+        <button class="btn small ghost" data-fedit="${i}|${esc(f.id)}" title="Open it on its page to change filters and metrics">Edit</button><button class="btn small ghost" data-fren="${i}|${esc(f.id)}">Rename</button><button class="btn small ghost danger" data-fdel="${i}|${esc(f.id)}">Delete</button></div>`).join('')}</div>` : '<span class="muted">None yet</span>'}</td>
+      <td><button class="btn small" data-fnew="${i}">+ New filter</button></td></tr>`; }).join('')}
+    </tbody></table></div>`;
+  const at = (v) => { const [i, id] = v.split('|'); return { p: pages[+i], id }; };
+  const redraw = () => drawMyFilters(card);
+  card.querySelectorAll('[data-def]').forEach((sel) => (sel.onchange = async () => { const p = pages[+sel.dataset.def]; await saveSettings(patchDefault(S, p.scope, sel.value), `${p.label}: default is now ${filterName(S, p.scope, sel.value)}`); redraw(); }));
+  card.querySelectorAll('[data-fnew]').forEach((b) => (b.onclick = () => { const p = pages[+b.dataset.fnew]; nameModal(`New filter for ${p.label}`, '', async (name) => {
+    const id = newFilterId();
+    await saveSettings(patchFilters(S, p.scope, [...filtersFor(S, p.scope), { id, name, cfg: p.base() }]), `Created "${name}". Choose its filters and metrics, then Save changes.`);
+    setViewing(p.scope, id); p.go();
+  }, "It starts as a copy of Vithai's default. You'll pick its filters and metrics on the page next."); }));
+  card.querySelectorAll('[data-fedit]').forEach((b) => (b.onclick = () => { const { p, id } = at(b.dataset.fedit); setViewing(p.scope, id); p.go(); }));
+  card.querySelectorAll('[data-fren]').forEach((b) => (b.onclick = () => { const { p, id } = at(b.dataset.fren); nameModal('Rename filter', filterById(S, p.scope, id)?.name, async (name) => {
+    await saveSettings(patchFilters(S, p.scope, filtersFor(S, p.scope).map((f) => (f.id === id ? { ...f, name } : f))), 'Renamed'); redraw();
+  }); }));
+  card.querySelectorAll('[data-fdel]').forEach((b) => (b.onclick = async () => { const { p, id } = at(b.dataset.fdel); const f = filterById(S, p.scope, id);
+    const wasDef = defaultIdFor(S, p.scope) === id;
+    if (!confirm(`Delete the filter "${f.name}" for ${p.label}?${wasDef ? ' It is the default there, so Vithai default takes over.' : ''}`)) return;
+    await saveSettings({ ...patchFilters(S, p.scope, filtersFor(S, p.scope).filter((x) => x.id !== id)), ...(wasDef ? patchDefault(S, p.scope, 'vithai') : {}) }, `Deleted "${f.name}"`);
+    redraw();
+  }));
+}
+
 // ---------------------------------------------------------------- ranking helpers
 function slotDefault(slot) {
   const d = DEFAULT_CRITERIA[slot];
   return { minAge: d.minAge, sub: d.sub, criteria: d.criteria, hideClosed: true };
 }
-function slotConfig(slot) {
-  const d = DEFAULT_CRITERIA[slot];
-  const o = S.settings.criteria?.[slot] || {};
-  return { minAge: o.minAge ?? d.minAge, sub: o.sub ?? d.sub, criteria: o.criteria ?? d.criteria, hideClosed: o.hideClosed ?? true };
+// The config for a fund section under a given filter id ('vithai' or one of yours); default = the page's default filter
+function slotConfig(slot, id = defaultIdFor(S, fundScope(slot))) {
+  const d = slotDefault(slot);
+  const o = id === 'vithai' ? {} : filterById(S, fundScope(slot), id)?.cfg || {};
+  return { minAge: o.minAge ?? d.minAge, sub: [...(o.sub ?? d.sub)], criteria: (o.criteria ?? d.criteria).map((c) => [...c]), hideClosed: o.hideClosed ?? d.hideClosed };
 }
 const isExcluded = (f) => (S.settings.excludedAmcs || []).some((a) => f.amc.toLowerCase() === a.toLowerCase());
 
@@ -201,6 +242,7 @@ function renderSetup(main) {
       <div id="exl"></div>
       <div class="row" style="max-width:520px;margin-top:8px"><div><select class="input" id="amcsel"><option value="">Add a fund house…</option>${amcs.map((a) => `<option>${esc(a)}</option>`).join('')}</select></div></div>
     </div>
+    <div class="card" id="myfilters"></div>
     <div class="card">
       <h3>US stocks slot</h3><p class="sub">Optional. When on, a US stocks line joins the allocation above, invested across the basket you build on the US stocks dashboard.</p>
       <label class="toggle"><input type="checkbox" id="usslot" ${s.usSlot ? 'checked' : ''}>Include a US stocks slot in my allocation</label>
@@ -209,6 +251,7 @@ function renderSetup(main) {
     </div>
     <div class="row" style="max-width:420px"><button class="btn primary" id="savesetup">Save setup</button></div>`;
 
+  drawMyFilters(main.querySelector('#myfilters'));
   let excluded = [...(s.excludedAmcs || [])];
   const drawExcl = () => {
     document.getElementById('exl').innerHTML = excluded.length
@@ -270,8 +313,10 @@ let fundSort = { key: 'rank', dir: 1 };
 let fundSearch = '';
 function renderFunds(main) {
   const slot = S.fundsTab;
-  const cfg = slotConfig(slot);
-  const ranked = rankedFor(slot);
+  const scope = fundScope(slot);
+  const cfg = slotConfig(slot, viewIdFor(S, scope));
+  const base = JSON.stringify(slotConfig(slot, viewIdFor(S, scope)));
+  const ranked = rankFunds(eligibleFunds(slot, cfg), cfg.criteria, TT_METRICS);
   const chosen = chosenFund(slot);
   const lastRefresh = S.meta.lastRefresh ? new Date(S.meta.lastRefresh).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' }) : 'never';
   const ttInfo = S.meta.tickertapeUploadedAt ? `Tickertape upload: ${new Date(S.meta.tickertapeUploadedAt).toLocaleDateString('en-GB', { dateStyle: 'medium' })} (${S.meta.tickertapeMatched || 0} funds matched)` : 'No Tickertape upload yet';
@@ -286,7 +331,7 @@ function renderFunds(main) {
       <div class="card criteria" id="critpanel"></div>
       <div>
         <div class="pick-box">${chosen.fund
-          ? `<div>Your ${SLOTS[slot].label.toLowerCase()} fund: <b>${esc(chosen.fund.name)}</b> ${chosen.pinned ? '<span class="badge">pinned</span>' : '<span class="badge good">top ranked</span>'}</div>${chosen.pinned ? '<button class="btn small" id="unpin">Use top-ranked instead</button>' : ''}`
+          ? `<div>Your ${SLOTS[slot].label.toLowerCase()} fund: <b>${esc(chosen.fund.name)}</b> ${chosen.pinned ? '<span class="badge">pinned</span>' : `<span class="badge good">top ranked · ${esc(filterName(S, scope, defaultIdFor(S, scope)))}</span>`}</div>${chosen.pinned ? '<button class="btn small" id="unpin">Use top-ranked instead</button>' : ''}`
           : '<div>No eligible funds with the current filters.</div>'}</div>
         <div class="toolbar"><input class="input search" id="fsearch" placeholder="Search fund or AMC…" value="${esc(fundSearch)}">
           <span class="note">${ranked.length} funds ranked${S.settings.excludedAmcs?.length ? ` · ${S.funds.filter((f) => f.slot === slot && isExcluded(f)).length} hidden by your exclusions` : ''}</span></div>
@@ -312,11 +357,9 @@ function renderFunds(main) {
       ...Object.entries(METRICS).map(([k, m]) => ({ key: k, label: m.label, group: m.group })),
       ...ttKeys.map((k) => ({ key: k, label: TT_METRICS[k].label, group: `Tickertape: ${guessGroup(TT_METRICS[k].label)}` })),
     ];
-    const def = { ...slotDefault(slot) };
-    const saved = !!S.settings.criteria?.[slot];
-    const status = () => { const same = JSON.stringify([cfg.minAge, [...cfg.sub].sort(), cfg.hideClosed, cfg.criteria]) === JSON.stringify([def.minAge, [...def.sub].sort(), def.hideClosed, def.criteria]);
-      return same ? '<span class="badge good">Vithai default</span>' : `<span class="badge gold">${saved ? 'Your saved criteria' : 'Custom · not saved yet'}</span>`; };
-    panel.innerHTML = `<div class="sechead" style="margin-bottom:4px"><div><h3 style="margin:0">Ranking criteria</h3></div><span id="critstatus">${status()}</span></div>
+    const dirty = () => JSON.stringify(cfg) !== base;
+    delete panel.dataset.fstate;
+    panel.innerHTML = `<h3>Ranking criteria</h3><div id="fbarwrap"></div>
       <p class="sub">Each fund's score is the weighted average of its percentile on each metric you add. Funds missing a metric are scored on the rest.</p>
       <div class="filterbox"><div class="fb-head"><span class="crit-group" style="margin:0">Filters</span><button type="button" class="btn small ghost" id="clearfilters" title="Show every fund: no minimum age, all sub-categories, include closed funds">Clear filters</button></div>
         <div class="row tight" style="align-items:flex-end;flex-wrap:wrap">
@@ -328,7 +371,7 @@ function renderFunds(main) {
       <div id="mpick"></div>
       ${ttKeys.length ? '' : `<p class="note">Load your Tickertape mutual fund export on the <a href="#/data">Data</a> page to rank on any of its columns too.</p>`}
       ${gone.length ? `<p class="note warn" style="margin-top:10px">${gone.length} saved metric${gone.length > 1 ? 's are' : ' is'} not in your current data (${gone.map((k) => esc(k.replace(/^tt:/, ''))).join(', ')}) and left out. <button class="btn small" id="dropgone">Remove</button></p>` : ''}
-      <div class="row tight" style="margin-top:14px"><button class="btn primary" id="savecrit">Save criteria</button><button class="btn ghost" id="resetcrit">Reset to Vithai default</button></div>`;
+      <div id="factwrap"></div>`;
     const keepGone = () => cfg.criteria.filter(([k]) => gone.includes(k));
     const picker = metricPicker(panel.querySelector('#mpick'), {
       items,
@@ -337,7 +380,16 @@ function renderFunds(main) {
       cover,
       onChange: (sel) => { cfg.criteria = [...sel.map(({ key, w, d }) => (d !== metricOf(key).dir ? [key, w, d] : [key, w])), ...keepGone()]; drawTable(true); upd(); },
     });
-    const upd = () => { document.getElementById('critstatus').innerHTML = status(); };
+    const upd = () => {
+      // only redraw when the state shown changes, so a click isn't lost to a redraw mid-click
+      const bar = filterBarHTML(S, scope, dirty()), acts = filterActionsHTML(S, scope, dirty());
+      if (panel.dataset.fstate === bar + acts) return;
+      panel.dataset.fstate = bar + acts;
+      panel.querySelector('#fbarwrap').innerHTML = bar;
+      panel.querySelector('#factwrap').innerHTML = acts;
+      wireFilterBar(panel, S, { scope, saveSettings, cfg: () => JSON.parse(JSON.stringify(cfg)), dirty, rerender: () => renderFunds(main), pageLabel: `${SLOTS[slot].label} funds` });
+    };
+    upd();
     document.getElementById('clearfilters').onclick = () => { cfg.minAge = 0; cfg.hideClosed = false; if (subs) cfg.sub = [...subs]; drawCriteria(); drawTable(true); };
     const filters = () => {
       cfg.minAge = Number(document.getElementById('minage').value) || 0;
@@ -348,8 +400,6 @@ function renderFunds(main) {
     };
     panel.querySelectorAll('#minage, #hideclosed, .subchk').forEach((i) => (i.onchange = filters));
     document.getElementById('dropgone')?.addEventListener('click', () => { cfg.criteria = cfg.criteria.filter(([k]) => !gone.includes(k)); drawCriteria(); drawTable(true); });
-    document.getElementById('savecrit').onclick = async () => { await saveSettings({ criteria: { ...S.settings.criteria, [slot]: { minAge: cfg.minAge, sub: cfg.sub, criteria: cfg.criteria, hideClosed: cfg.hideClosed } } }, 'Criteria saved'); renderFunds(main); };
-    document.getElementById('resetcrit').onclick = async () => { const c = { ...S.settings.criteria }; delete c[slot]; await saveSettings({ criteria: c }, 'Back to the Vithai default'); renderFunds(main); };
   }
 
   function drawTable(fromCriteria) {

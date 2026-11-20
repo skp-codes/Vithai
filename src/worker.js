@@ -413,9 +413,18 @@ async function putSettings(request, env, me) {
   if (Array.isArray(b.usBasket)) s.usBasket = b.usBasket.slice(0, 100).map((x) => ({ key: str(x.key, 200), name: str(x.name, 200), weight: Math.max(0, num(x.weight) ?? 1) })).filter((x) => x.key);
   if (b.stockCriteria && typeof b.stockCriteria === 'object') s.stockCriteria = b.stockCriteria;
   if (b.niftyPlan && typeof b.niftyPlan === 'object') s.niftyPlan = b.niftyPlan;
+  // Named personal ranking filters, per page (fund section, Indian stocks, US stocks), and which one each page uses by default
+  const SCOPE = /^(fund:[a-z]+|stock:(in|us))$/;
+  if (b.myFilters && typeof b.myFilters === 'object') {
+    s.myFilters = Object.fromEntries(Object.entries(b.myFilters).filter(([k, v]) => SCOPE.test(k) && Array.isArray(v)).map(([k, v]) => [k,
+      v.slice(0, 30).map((f) => ({ id: str(f?.id, 40), name: str(f?.name, 60) || 'My filter', cfg: f?.cfg && typeof f.cfg === 'object' ? f.cfg : {} })).filter((f) => f.id)]));
+  }
+  if (b.defaultFilter && typeof b.defaultFilter === 'object') {
+    s.defaultFilter = Object.fromEntries(Object.entries(b.defaultFilter).filter(([k]) => SCOPE.test(k)).map(([k, v]) => [k, str(v, 40) || 'vithai']));
+  }
   if (!s.usSlot) s.alloc.usstocks = 0;
   const data = JSON.stringify(s);
-  if (data.length > 50000) throw new HttpError(400, 'Settings too large.');
+  if (data.length > 400000) throw new HttpError(400, 'Settings too large.');
   await env.DB.prepare(
     "INSERT INTO settings (user_id, data, updated_at) VALUES (?, ?, datetime('now')) ON CONFLICT(user_id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at",
   ).bind(me.id, data).run();

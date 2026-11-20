@@ -175,6 +175,15 @@ table.t tr.deleting .btot { color: var(--bad); font-family: var(--ui); font-size
 .crit-group { font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); margin: 16px 0 8px; font-weight: 700; }
 .filterbox { background: var(--head); border-radius: var(--radius-s); padding: 12px 14px; }
 .filterbox .input { background: var(--card); }
+.fbar { margin: 4px 0 12px; }
+.fbar-row { display: flex; gap: 4px; align-items: center; }
+.fbar-row select { flex: 1 1 auto; font-weight: 600; }
+.fbar-status { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 8px; font-size: 12px; }
+.linkbtn { border: 0; background: none; color: var(--accent); cursor: pointer; padding: 0; font-size: 12px; font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
+.flist { display: grid; gap: 4px; }
+.fitem { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.fitem .fname { font-weight: 600; margin-right: 6px; }
+.fitem .star, .star { color: var(--gold); }
 .fb-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 .mp-acts { display: inline-flex; gap: 4px; }
 .mp-acts [hidden] { display: none; }
