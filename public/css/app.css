@@ -175,6 +175,9 @@ table.t tr.deleting .btot { color: var(--bad); font-family: var(--ui); font-size
 .crit-group { font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); margin: 16px 0 8px; font-weight: 700; }
 .filterbox { background: var(--head); border-radius: var(--radius-s); padding: 12px 14px; }
 .filterbox .input { background: var(--card); }
+.fb-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.mp-acts { display: inline-flex; gap: 4px; }
+.mp-acts [hidden] { display: none; }
 .crit { display: grid; grid-template-columns: 18px 1fr auto 54px; align-items: center; gap: 8px; padding: 4px 0; font-size: 12.5px; }
 .crit input[type=checkbox] { accent-color: var(--accent); }
 .crit input.w { width: 54px; padding: 3px 5px; border: 1px solid var(--line); border-radius: 6px; font-family: var(--mono); font-size: 12px; text-align: right; background: var(--canvas); }

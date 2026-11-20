@@ -94,28 +94,34 @@ export async function renderStocks(main, mkt, ctx) {
     const panel = document.getElementById('scrit');
     const cover = (c) => { const uni = universe(); return uni.length ? uni.filter((o) => typeof o[c] === 'number').length / uni.length : 0; };
     const gone = unavailable();
-    panel.innerHTML = `<h3>Ranking criteria</h3><p class="sub">Each stock's score is the weighted average of its percentile on the metrics you add, within the universe you set.</p>
+    const def = { criteria: defaultCriteria(ds, numCols).criteria, topN: 500, sectors: [] };
+    const saved = !!S.settings.stockCriteria?.[mkt];
+    const status = () => (JSON.stringify([cfg.criteria, cfg.topN, [...cfg.sectors].sort()]) === JSON.stringify([def.criteria, def.topN, []])
+      ? '<span class="badge good">Vithai default</span>' : `<span class="badge gold">${saved ? 'Your saved criteria' : 'Custom · not saved yet'}</span>`);
+    panel.innerHTML = `<div class="sechead" style="margin-bottom:4px"><div><h3 style="margin:0">Ranking criteria</h3></div><span id="critstatus">${status()}</span></div><p class="sub">Each stock's score is the weighted average of its percentile on the metrics you add, within the universe you set.</p>
       ${gone.length ? `<div class="card" style="background:var(--gold-soft);border-color:transparent;padding:12px 14px"><b>Not in your current data</b><p class="note" style="margin:4px 0 8px">These saved metrics aren't in the latest import (renamed or missing), so they're left out of the score.</p>
         ${gone.map(([l], i) => `<div class="row" style="align-items:center;margin-bottom:6px"><span style="flex:1 1 100%;font-size:12.5px">${esc(l)}</span>
           <select class="input" data-swap="${i}" style="padding:3px 6px;font-size:12px"><option value="">Use another column instead…</option>${numCols.map((c) => `<option>${esc(c)}</option>`).join('')}</select>
           <button class="btn small" data-drop="${i}" style="flex:0 0 auto">Remove</button></div>`).join('')}</div>` : ''}
       ${defaults.missing.length ? `<p class="note warn">Default metrics not in your data (left out): ${esc(defaults.missing.join(', '))}. Match them on the Data page if the column was renamed.</p>` : ''}
-      <div class="filterbox"><div class="crit-group" style="margin-top:0">Filters</div>
+      <div class="filterbox"><div class="fb-head"><span class="crit-group" style="margin:0">Filters</span><button type="button" class="btn small ghost" id="clearfilters" title="All stocks, all sectors">Clear filters</button></div>
         ${mcapCol ? `<div><label class="f">Universe: top N by market cap <span class="muted">(0 = all)</span></label><input class="input num" id="topn" type="number" min="0" step="50" value="${cfg.topN}"></div>` : '<p class="note warn">No market cap column mapped, so the universe is all stocks.</p>'}
         ${sectors.length ? `<div style="margin-top:10px"><label class="f">Sectors</label><select class="input" id="secsel"><option value="">${cfg.sectors.length ? '+ Add another sector…' : 'All sectors · pick one to filter…'}</option>${sectors.filter((x) => !cfg.sectors.includes(x)).map((x) => `<option>${esc(x)}</option>`).join('')}</select>
           ${cfg.sectors.length ? `<div class="chips" style="margin-top:6px">${cfg.sectors.map((x, i) => `<span class="chip">${esc(x)}<button data-sec="${i}" aria-label="Remove">×</button></span>`).join('')}</div>` : ''}</div>` : ''}
       </div>
       <div class="crit-group">Scoring on</div>
       <div id="mpick"></div>
-      <div class="row tight" style="margin-top:14px"><button class="btn primary" id="ssave">Save criteria</button><button class="btn ghost" id="sreset">Reset to default</button></div>`;
+      <div class="row tight" style="margin-top:14px"><button class="btn primary" id="ssave">Save criteria</button><button class="btn ghost" id="sreset">Reset to Vithai default</button></div>`;
     const picker = metricPicker(panel.querySelector('#mpick'), {
       items: numCols.map((c) => ({ key: c, label: c, group: guessGroup(c) })),
       selected: usable().map(([l, w, d]) => ({ key: l, w, d: d || guessDir(l) })),
       dirOf: guessDir,
       cover,
-      onChange: (sel) => { const g = unavailable(); cfg.criteria = [...sel.map((x) => [x.key, x.w, x.d]), ...g]; drawTable(); },
+      onChange: (sel) => { const g = unavailable(); cfg.criteria = [...sel.map((x) => [x.key, x.w, x.d]), ...g]; drawTable(); upd(); },
     });
-    panel.querySelector('#topn')?.addEventListener('change', (e) => { cfg.topN = Number(e.target.value) || 0; picker.refresh(); drawTable(); });
+    const upd = () => { document.getElementById('critstatus').innerHTML = status(); };
+    document.getElementById('clearfilters').onclick = () => { cfg.topN = 0; cfg.sectors = []; drawCriteria(); drawTable(); };
+    panel.querySelector('#topn')?.addEventListener('change', (e) => { cfg.topN = Number(e.target.value) || 0; picker.refresh(); drawTable(); upd(); });
     panel.querySelectorAll('[data-drop]').forEach((b) => (b.onclick = () => { const l = gone[+b.dataset.drop][0]; cfg.criteria = cfg.criteria.filter(([x]) => x !== l); drawCriteria(); drawTable(); }));
     panel.querySelectorAll('[data-swap]').forEach((sel) => (sel.onchange = () => {
       if (!sel.value) return;
@@ -125,10 +131,10 @@ export async function renderStocks(main, mkt, ctx) {
     }));
     panel.querySelector('#secsel')?.addEventListener('change', (e) => { if (e.target.value && !cfg.sectors.includes(e.target.value)) cfg.sectors.push(e.target.value); drawCriteria(); drawTable(); });
     panel.querySelectorAll('[data-sec]').forEach((b) => (b.onclick = () => { cfg.sectors.splice(+b.dataset.sec, 1); drawCriteria(); drawTable(); }));
-    document.getElementById('ssave').onclick = async () => { await saveSettings({ stockCriteria: { ...S.settings.stockCriteria, [mkt]: { criteria: cfg.criteria, topN: cfg.topN, sectors: cfg.sectors } } }, 'Criteria saved'); };
+    document.getElementById('ssave').onclick = async () => { await saveSettings({ stockCriteria: { ...S.settings.stockCriteria, [mkt]: { criteria: cfg.criteria, topN: cfg.topN, sectors: cfg.sectors } } }, 'Criteria saved'); drawCriteria(); };
     document.getElementById('sreset').onclick = async () => {
       const sc = { ...S.settings.stockCriteria }; delete sc[mkt];
-      await saveSettings({ stockCriteria: sc }, 'Back to the default criteria');
+      await saveSettings({ stockCriteria: sc }, 'Back to the Vithai default');
       cfg.criteria = defaultCriteria(ds, numCols).criteria; cfg.topN = 500; cfg.sectors = []; drawCriteria(); drawTable();
     };
   }

@@ -134,6 +134,10 @@ function renderShell() {
 }
 
 // ---------------------------------------------------------------- ranking helpers
+function slotDefault(slot) {
+  const d = DEFAULT_CRITERIA[slot];
+  return { minAge: d.minAge, sub: d.sub, criteria: d.criteria, hideClosed: true };
+}
 function slotConfig(slot) {
   const d = DEFAULT_CRITERIA[slot];
   const o = S.settings.criteria?.[slot] || {};
@@ -308,9 +312,13 @@ function renderFunds(main) {
       ...Object.entries(METRICS).map(([k, m]) => ({ key: k, label: m.label, group: m.group })),
       ...ttKeys.map((k) => ({ key: k, label: TT_METRICS[k].label, group: `Tickertape: ${guessGroup(TT_METRICS[k].label)}` })),
     ];
-    panel.innerHTML = `<h3>Ranking criteria</h3>
+    const def = { ...slotDefault(slot) };
+    const saved = !!S.settings.criteria?.[slot];
+    const status = () => { const same = JSON.stringify([cfg.minAge, [...cfg.sub].sort(), cfg.hideClosed, cfg.criteria]) === JSON.stringify([def.minAge, [...def.sub].sort(), def.hideClosed, def.criteria]);
+      return same ? '<span class="badge good">Vithai default</span>' : `<span class="badge gold">${saved ? 'Your saved criteria' : 'Custom · not saved yet'}</span>`; };
+    panel.innerHTML = `<div class="sechead" style="margin-bottom:4px"><div><h3 style="margin:0">Ranking criteria</h3></div><span id="critstatus">${status()}</span></div>
       <p class="sub">Each fund's score is the weighted average of its percentile on each metric you add. Funds missing a metric are scored on the rest.</p>
-      <div class="filterbox"><div class="crit-group" style="margin-top:0">Filters</div>
+      <div class="filterbox"><div class="fb-head"><span class="crit-group" style="margin:0">Filters</span><button type="button" class="btn small ghost" id="clearfilters" title="Show every fund: no minimum age, all sub-categories, include closed funds">Clear filters</button></div>
         <div class="row tight" style="align-items:flex-end;flex-wrap:wrap">
           <div style="flex:0 0 130px"><label class="f">Minimum age (yrs)</label><input class="input num" id="minage" type="number" min="0" step="1" value="${cfg.minAge}"></div>
           <label class="toggle" style="flex:1 1 200px;margin-bottom:8px"><input type="checkbox" id="hideclosed" ${cfg.hideClosed ? 'checked' : ''}>Hide funds closed to new SIPs</label></div>
@@ -320,21 +328,23 @@ function renderFunds(main) {
       <div id="mpick"></div>
       ${ttKeys.length ? '' : `<p class="note">Load your Tickertape mutual fund export on the <a href="#/data">Data</a> page to rank on any of its columns too.</p>`}
       ${gone.length ? `<p class="note warn" style="margin-top:10px">${gone.length} saved metric${gone.length > 1 ? 's are' : ' is'} not in your current data (${gone.map((k) => esc(k.replace(/^tt:/, ''))).join(', ')}) and left out. <button class="btn small" id="dropgone">Remove</button></p>` : ''}
-      <div class="row tight" style="margin-top:14px"><button class="btn primary" id="savecrit">Save criteria</button><button class="btn ghost" id="resetcrit">Reset to default</button></div>`;
+      <div class="row tight" style="margin-top:14px"><button class="btn primary" id="savecrit">Save criteria</button><button class="btn ghost" id="resetcrit">Reset to Vithai default</button></div>`;
     const keepGone = () => cfg.criteria.filter(([k]) => gone.includes(k));
     const picker = metricPicker(panel.querySelector('#mpick'), {
       items,
       selected: cfg.criteria.filter(([k]) => metricOf(k)).map(([k, w, d]) => ({ key: k, w, d: d || metricOf(k).dir })),
       dirOf: (k) => metricOf(k).dir,
       cover,
-      onChange: (sel) => { cfg.criteria = [...sel.map(({ key, w, d }) => (d !== metricOf(key).dir ? [key, w, d] : [key, w])), ...keepGone()]; drawTable(true); },
+      onChange: (sel) => { cfg.criteria = [...sel.map(({ key, w, d }) => (d !== metricOf(key).dir ? [key, w, d] : [key, w])), ...keepGone()]; drawTable(true); upd(); },
     });
+    const upd = () => { document.getElementById('critstatus').innerHTML = status(); };
+    document.getElementById('clearfilters').onclick = () => { cfg.minAge = 0; cfg.hideClosed = false; if (subs) cfg.sub = [...subs]; drawCriteria(); drawTable(true); };
     const filters = () => {
       cfg.minAge = Number(document.getElementById('minage').value) || 0;
       cfg.hideClosed = document.getElementById('hideclosed').checked;
       if (subs) cfg.sub = [...panel.querySelectorAll('.subchk:checked')].map((c) => c.value);
       panel.querySelectorAll('.pill').forEach((l) => l.classList.toggle('on', l.querySelector('input').checked));
-      picker.refresh(); drawTable(true);
+      picker.refresh(); drawTable(true); upd();
     };
     panel.querySelectorAll('#minage, #hideclosed, .subchk').forEach((i) => (i.onchange = filters));
     document.getElementById('dropgone')?.addEventListener('click', () => { cfg.criteria = cfg.criteria.filter(([k]) => !gone.includes(k)); drawCriteria(); drawTable(true); });

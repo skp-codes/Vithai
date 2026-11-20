@@ -35,13 +35,14 @@ export function metricPicker(host, o) {
 
   host.classList.add('mpick');
   host.innerHTML = `<div class="mp-head"><span><b>${sel.length}</b> of ${o.items.length} metrics in the score</span>
-      <button type="button" class="btn small primary" data-mp="open">+ Add metrics</button></div>
+      <span class="mp-acts"><button type="button" class="btn small ghost danger" data-mp="clear" title="Remove every metric from the score">Clear all</button><button type="button" class="btn small primary" data-mp="open">+ Add metrics</button></span></div>
     <div class="mp-pop" hidden>
       <div class="mp-popbar"><input class="input" placeholder="Search ${o.items.length} metrics…" data-mp="q"><button type="button" class="btn small" data-mp="close">Done</button></div>
       <div class="mp-list"></div></div>
     <div class="mp-rows"></div>`;
   const rowsEl = host.querySelector('.mp-rows'), pop = host.querySelector('.mp-pop'), listEl = host.querySelector('.mp-list'), qEl = host.querySelector('[data-mp=q]');
-  const emit = () => { host.querySelector('.mp-head b').textContent = sel.length; o.onChange(sel.map((x) => ({ ...x }))); };
+  const clearBtn = host.querySelector('[data-mp=clear]');
+  const emit = () => { host.querySelector('.mp-head b').textContent = sel.length; clearBtn.hidden = !sel.length; o.onChange(sel.map((x) => ({ ...x }))); };
 
   const drawRows = () => {
     rowsEl.innerHTML = sel.length ? sel.map((x, i) => {
@@ -82,6 +83,8 @@ export function metricPicker(host, o) {
   };
   host.querySelector('[data-mp=open]').onclick = () => setOpen(!open);
   host.querySelector('[data-mp=close]').onclick = () => setOpen(false);
+  clearBtn.hidden = !sel.length;
+  clearBtn.onclick = () => { if (!confirm(`Remove all ${sel.length} metrics from the score? You can add them back, or use Reset to Vithai default.`)) return; sel = []; drawRows(); if (open) drawList(); emit(); };
   qEl.oninput = () => { query = qEl.value; drawList(); };
   drawRows();
   return { refresh: drawRows };
