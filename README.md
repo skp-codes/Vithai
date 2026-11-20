@@ -152,3 +152,12 @@ Each fund's score (0–100) is the weighted average of its percentile on each ti
 Sharpe and Sortino use a 6.5% risk-free rate over the last 3 years. Max drawdown is over the last 5 years.
 
 *Not financial advice. Rankings are backward-looking, and past performance does not guarantee future returns.*
+
+### Monthly plan layout
+
+Sections run in this order: Nifty 50, large cap, mid/small cap, debt, gold, international (then US stocks if you use them). Each section shows only what's **still to buy**. Once you save a purchase it moves to **Bought in <month>**, which lists every purchase that month (Nifty 50 stocks included), grouped by section, with quantity, price and date editable in place. Set a quantity to 0 and save to delete a purchase; the item goes back to Still to buy.
+
+### Choosing ranking metrics
+
+On the Fund dashboard and the stock pages, the metrics in your score are listed as compact rows (direction, weight, remove). **+ Add metrics** opens a searchable list of everything else, grouped (returns, valuation, profitability, risk and so on), so long Tickertape column lists stay out of the way until you need them.
+

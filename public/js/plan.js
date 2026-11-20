@@ -7,7 +7,7 @@ import { loadDataset } from './tickertape.js';
 import { usPriceLookup } from './stocks.js';
 
 const FUND_SECTIONS = ['largecap', 'midsmall', 'debt', 'international', 'gold'];
-const ORDER = ['largecap', 'nifty50', 'midsmall', 'debt', 'international', 'gold', 'usstocks'];
+const ORDER = ['nifty50', 'largecap', 'midsmall', 'debt', 'gold', 'international', 'usstocks'];
 export const NIFTY_ID = '__nifty50__', US_ID = '__usbasket__';
 const uid = () => Math.random().toString(36).slice(2, 10);
 const freshLine = ({ skip, extra, ...l }) => ({ ...l, id: uid() }); // eslint-disable-line no-unused-vars
@@ -132,18 +132,17 @@ export async function renderPlan(main, ctx) {
   }
 
   // Inline purchase entry: quantity and price per row, one date and one Record button per section
-  const entryCells = (slot, assetId, assetName, qtyHint, price) => {
-    const mine = transactions.filter((t) => t.slot === slot && t.assetId === assetId);
-    const t = mine.length === 1 ? mine[0] : null; // a recorded purchase shows here and can be changed in place
-    return `
-    <td class="r"><input class="input num rq${t ? ' saved' : ''}" data-slot="${slot}" data-asset="${esc(assetId)}" data-name="${esc(assetName)}" ${t ? `data-tx="${t.id}" value="${t.units}"` : ''} type="number" min="0" step="any" placeholder="${mine.length > 1 ? 'new' : qtyHint ?? ''}" title="${t ? `Recorded ${esc(t.tradeDate)}; change it and press Save` : mine.length > 1 ? `${mine.length} purchases recorded (edit them in the list at the bottom); anything typed here is a new purchase` : ''}" style="width:86px;padding:3px 6px"></td>
-    <td class="r"><input class="input num rp${t ? ' saved' : ''}" type="number" min="0" step="any" value="${t ? t.price : price ?? ''}" style="width:86px;padding:3px 6px"></td>
-    <td class="r rtot ${t ? '' : 'muted'}">${t ? inr(t.amount, 2) : '–'}</td>`;
-  };
+  const entryCells = (slot, assetId, assetName, qtyHint, price) => `
+    <td class="r"><input class="input num rq" data-slot="${slot}" data-asset="${esc(assetId)}" data-name="${esc(assetName)}" type="number" min="0" step="any" placeholder="${qtyHint ?? ''}" style="width:86px"></td>
+    <td class="r"><input class="input num rp" type="number" min="0" step="any" value="${price ?? ''}" style="width:86px"></td>
+    <td class="r rtot muted">–</td>`;
+  const boughtIds = new Set(transactions.map((t) => `${t.slot}|${t.assetId}`));
+  const isBought = (slot, id) => boughtIds.has(`${slot}|${id}`);
+  const allDone = (slot) => `<div class="done-note"><span class="tick">✓</span> Everything planned here is bought. See <b>Bought in ${esc(monthLabel(month))}</b> below to check or change it.</div>`;
   const entryFoot = (slot, qtyWord) => `<div class="row tight" style="margin-top:10px;align-items:flex-end;flex-wrap:wrap">
       <div><label class="f">Date bought</label><input class="input rdate" data-slot="${slot}" type="date" value="${today()}"></div>
       <button class="btn" data-rfill="${slot}">Fill in planned ${qtyWord}</button><button class="btn primary" data-rsave="${slot}">Save what I entered</button></div>
-    <p class="note" style="margin:6px 0 0">Type the ${qtyWord} and the ${slot === 'usstocks' || slot === 'nifty50' ? 'price per share' : 'NAV'} you actually got (from your Coin / Kite contract note), then Save. Rows already recorded (shaded) show what you entered: change them and Save to correct them, or clear the ${qtyWord === 'units' ? 'units' : 'quantity'} to delete. Rows left blank are skipped. What you paid never changes when prices are updated; only the current value does.</p>`;
+    <p class="note" style="margin:6px 0 0">Type the ${qtyWord} and the ${slot === 'usstocks' || slot === 'nifty50' ? 'price per share' : 'NAV'} you actually got (from your Coin / Kite contract note), then Save. Saved rows move to <b>Bought in ${esc(monthLabel(month))}</b>. Rows left blank stay here as still to buy.</p>`;
 
   const planned = sum(lines, 'amount');
   const recorded = sum(transactions, 'amount');
@@ -160,11 +159,42 @@ export async function renderPlan(main, ctx) {
     </div>
     ${draft ? '' : `<div class="row tight" style="margin-bottom:16px;flex-wrap:wrap">${previous ? `<button class="btn" id="copyprev">Replace with ${esc(monthLabel(previous.month))}'s plan</button>` : ''}
       <button class="btn" id="rebuild">Rebuild from my allocation</button><button class="btn danger" id="delplan">Delete this month's plan</button></div>`}
+    <div class="group-title"><h3>Still to buy in ${esc(monthLabel(month))}</h3><span class="muted">${pendingCount()} item${pendingCount() === 1 ? '' : 's'} left</span></div>
     ${ORDER.filter((slot) => lines.some((l) => l.slot === slot) || FUND_SECTIONS.includes(slot) || slot === 'nifty50' || (slot === 'usstocks' && s.usSlot)).map(section).join('')}
-    <div class="card"><details ${transactions.length <= 15 ? 'open' : ''}><summary style="cursor:pointer"><h3 style="display:inline">Everything recorded in ${esc(monthLabel(month))}</h3> <span class="muted">(${transactions.length} purchase${transactions.length === 1 ? '' : 's'}, ${inr(recorded)}) · edit or delete here</span></summary>
-      <div class="tablewrap" style="margin-top:10px"><table class="t"><thead><tr><th>Date</th><th>Section</th><th>Bought</th><th class="r">Units</th><th class="r">Price</th><th class="r">Amount</th><th></th></tr></thead>
-      <tbody>${transactions.map((t) => `<tr><td>${esc(t.tradeDate)}</td><td>${SLOTS[t.slot]?.short || t.slot}</td><td class="nm">${esc(t.assetName)}</td><td class="r">${num(t.units, 4)}</td><td class="r">${num(t.price, 4)}</td><td class="r">${inr(t.amount, 2)}</td>
-        <td><button class="btn small" data-edit="${t.id}">Edit</button> <button class="btn small danger" data-del="${t.id}">Delete</button></td></tr>`).join('') || '<tr><td colspan="7" class="muted">Nothing recorded yet this month.</td></tr>'}</tbody></table></div></details></div>`;
+    ${boughtCard()}`;
+
+  function pendingCount() {
+    let n = 0;
+    for (const l of lines) {
+      if (FUND_SECTIONS.includes(l.slot)) n += isBought(l.slot, l.assetId) ? 0 : 1;
+      else if (l.slot === 'nifty50') { const nb = niftyBudget(S, month, l, []); n += nb.rows.filter((r) => r.qty > 0 && !nb.skip.has(r.symbol) && !nb.extras.some((x) => x.symbol === r.symbol) && !isBought('nifty50', r.symbol)).length + nb.extras.filter((x) => !isBought('nifty50', x.symbol)).length; }
+      else if (l.slot === 'usstocks') n += (s.usBasket || []).filter((x) => !isBought('usstocks', x.key)).length;
+    }
+    return n;
+  }
+
+  // Every purchase this month, in plan order, editable in place. Clearing a quantity deletes the
+  // purchase and the item goes back to "Still to buy".
+  function boughtCard() {
+    const rank = (t) => ORDER.indexOf(t.slot);
+    const list = [...transactions].sort((a, b) => rank(a) - rank(b) || a.tradeDate.localeCompare(b.tradeDate) || a.assetName.localeCompare(b.assetName));
+    const stock = (t) => t.slot === 'nifty50' || t.slot === 'usstocks';
+    const nameOf = (t) => (t.slot === 'nifty50' ? S.nifty.find((x) => x.symbol === t.assetId)?.name : '') || '';
+    const planned = (t) => FUND_SECTIONS.includes(t.slot) ? lines.some((l) => l.slot === t.slot && l.assetId === t.assetId) : true;
+    let last = '';
+    return `<div class="card bought" id="boughtcard">
+      <div class="sechead"><div><h3 style="margin:0">Bought in ${esc(monthLabel(month))}</h3>
+        <p class="note" style="margin:2px 0 0">${transactions.length} purchase${transactions.length === 1 ? '' : 's'} · ${inr(recorded)}. Change a quantity, price or date and press Save changes. Clear the quantity to delete a purchase; it goes back to Still to buy.</p></div>
+        <div class="row tight"><button class="btn primary small" id="bsave" disabled>Save changes</button></div></div>
+      <div class="tablewrap"><table class="t"><thead><tr><th>Bought</th><th>Date</th><th class="r">Qty / units</th><th class="r">Price / NAV paid</th><th class="r">Amount</th><th></th></tr></thead>
+      <tbody>${list.map((t) => { const g = t.slot !== last ? `<tr class="grp"><td colspan="6">${SLOTS[t.slot]?.label || esc(t.slot)}</td></tr>` : ''; last = t.slot; return `${g}<tr data-tx="${t.id}">
+        <td class="nm"><b>${esc(t.assetName)}</b>${planned(t) ? '' : ' <span class="badge">extra · not in plan</span>'}<span class="a">${esc(nameOf(t))}${t.note ? `${nameOf(t) ? ' · ' : ''}${esc(t.note)}` : ''}</span></td>
+        <td><input class="input bd" type="date" value="${esc(t.tradeDate)}" style="width:140px"></td>
+        <td class="r"><input class="input num bq" type="number" min="0" step="any" value="${t.units}" style="width:96px" title="${stock(t) ? 'Shares' : 'Units'}"></td>
+        <td class="r"><input class="input num bp" type="number" min="0" step="any" value="${t.price}" style="width:96px"></td>
+        <td class="r btot">${inr(t.amount, 2)}</td>
+        <td style="white-space:nowrap"><button class="btn small ghost" data-edit="${t.id}" title="Edit with amount and note">More…</button> <button class="btn small danger ghost" data-del="${t.id}" title="Delete">Delete</button></td></tr>`; }).join('') || `<tr><td colspan="6" class="empty">Nothing bought yet in ${esc(monthLabel(month))}. Enter purchases in the sections above.</td></tr>`}</tbody></table></div></div>`;
+  }
 
   function section(slot) {
     const ls = lines.filter((l) => l.slot === slot);
@@ -172,20 +202,16 @@ export async function renderPlan(main, ctx) {
     const head = (extra = '') => `<div class="sechead"><div><h3 style="margin:0">${SLOTS[slot].label}</h3>
       <p class="note" style="margin:2px 0 0">Planned ${inr(sum(ls, 'amount'))} · recorded ${inr(sum(tx, 'amount'))}</p></div><div class="row tight">${extra}</div></div>`;
     if (FUND_SECTIONS.includes(slot)) {
-      const extraTx = tx.filter((t) => !ls.some((l) => l.assetId === t.assetId));
+      const todo = ls.filter((l) => !isBought(slot, l.assetId));
       return `<div class="card">${head(`<button class="btn small" data-add="${slot}">+ Add ${slot === 'gold' ? 'gold fund / ETF' : 'fund'} or extra purchase</button>`)}
-        <div class="tablewrap"><table class="t"><thead><tr><th>Fund</th><th class="r">Planned ₹</th><th class="r">Bought</th><th class="r">Units bought</th><th class="r">NAV paid</th><th class="r">Amount</th><th></th></tr></thead>
-        <tbody>${ls.map((l) => { const f = fundOf(l.assetId); const b = tx.filter((t) => t.assetId === l.assetId); return `<tr>
+        ${ls.length && !todo.length ? allDone(slot) : `<div class="tablewrap"><table class="t"><thead><tr><th>Fund</th><th class="r">Planned ₹</th><th class="r">Units bought</th><th class="r">NAV paid</th><th class="r">Amount</th><th></th></tr></thead>
+        <tbody>${todo.map((l) => { const f = fundOf(l.assetId); return `<tr>
           <td class="nm">${esc(l.assetName)}<span class="a">${f ? esc(f.amc) : '<span class="warn">no longer in the fund list</span>'}${slot === 'gold' ? ' · buy on Kite' : ''}${f?.nav ? ` · latest NAV ${num(f.nav, 4)}, about ${num(l.amount / f.nav, 3)} units` : ''}</span></td>
           <td class="r"><input class="input num amt" data-line="${l.id}" type="number" min="0" step="100" value="${l.amount}" style="width:92px;padding:4px 8px"></td>
-          <td class="r">${b.length ? `${num(sum(b, 'units'), 3)} <span class="muted">(${inr(sum(b, 'amount'))})</span>` : '–'}</td>
           ${entryCells(slot, l.assetId, l.assetName, f?.nav ? +(l.amount / f.nav).toFixed(3) : '', f?.nav)}
           <td style="white-space:nowrap"><button class="btn small" data-rec="${l.id}" title="Record with a date, amount and note">More…</button> <button class="btn small danger" data-drop="${l.id}">Drop</button></td></tr>`; }).join('')}
-        ${extraTx.map((t) => `<tr><td class="nm">${esc(t.assetName)} <span class="badge">extra · not in plan</span><span class="a">Bought ${esc(t.tradeDate)}${t.note ? ` · ${esc(t.note)}` : ''}</span></td>
-          <td class="r muted">–</td><td class="r">${num(t.units, 3)} <span class="muted">(${inr(t.amount)})</span></td><td class="r muted">${num(t.units, 3)}</td><td class="r muted">${num(t.price, 4)}</td><td class="r muted">${inr(t.amount, 2)}</td>
-          <td style="white-space:nowrap"><button class="btn small" data-edit="${t.id}">Edit</button> <button class="btn small danger" data-del="${t.id}">Delete</button></td></tr>`).join('')}
-        ${!ls.length && !extraTx.length ? '<tr><td colspan="7" class="muted">No funds in this section this month.</td></tr>' : ''}</tbody></table></div>
-        ${ls.length ? entryFoot(slot, 'units') : ''}</div>`;
+        ${!ls.length ? '<tr><td colspan="6" class="empty">No funds in this section this month.</td></tr>' : ''}</tbody></table></div>`}
+        ${todo.length ? entryFoot(slot, 'units') : ''}</div>`;
     }
     if (slot === 'nifty50') return niftySection(ls[0], tx, head);
     if (slot === 'usstocks') {
@@ -196,12 +222,12 @@ export async function renderPlan(main, ctx) {
       return `<div class="card">${head(`<a class="btn small" href="#/stocks-us">Edit basket</a><button class="btn small danger" data-drop="${line.id}">Drop</button>`)}
         <div class="row" style="align-items:center;margin-bottom:10px"><div style="flex:0 0 200px"><label class="f">Amount this month (₹)</label><input class="input num amt" data-line="${line.id}" type="number" min="0" step="100" value="${line.amount}"></div>
           <p class="note" style="margin:0">${s.usdInr ? `About $${num(line.amount / s.usdInr, 2)} at ₹${num(s.usdInr, 2)} per dollar.` : '<span class="warn">Set the rupee–dollar rate in Setup to see quantities.</span>'}</p></div>
-        <div class="tablewrap"><table class="t"><thead><tr><th>Stock</th><th class="r">Share</th><th class="r">Amount ₹</th><th class="r">Price $</th><th class="r">Qty</th><th class="r">Bought</th><th class="r">Qty bought</th><th class="r">Price paid ₹</th><th class="r">Amount</th><th></th></tr></thead>
-        <tbody>${basket.map((x, i) => { const inrAmt = line.amount * (x.weight || 0) / wT; const usd = usPrice(x.key); const q = usd && s.usdInr ? inrAmt / s.usdInr / usd : null; const b = tx.filter((t) => t.assetId === x.key); return `<tr>
+        <div class="tablewrap"><table class="t"><thead><tr><th>Stock</th><th class="r">Share</th><th class="r">Amount ₹</th><th class="r">Price $</th><th class="r">Qty</th><th class="r">Qty bought</th><th class="r">Price paid ₹</th><th class="r">Amount</th><th></th></tr></thead>
+        <tbody>${basket.map((x, i) => { if (isBought('usstocks', x.key)) return ''; const inrAmt = line.amount * (x.weight || 0) / wT; const usd = usPrice(x.key); const q = usd && s.usdInr ? inrAmt / s.usdInr / usd : null; return `<tr>
           <td class="nm">${esc(x.name)}</td><td class="r">${pct((x.weight || 0) / wT * 100, 0)}</td><td class="r">${inr(inrAmt, 2)}</td><td class="r">${num(usd, 2)}</td><td class="r">${q ? num(q, 4) : '–'}</td>
-          <td class="r">${b.length ? num(sum(b, 'units'), 4) : '–'}</td>${entryCells('usstocks', x.key, x.name, q ? +q.toFixed(4) : '', usd && s.usdInr ? +(usd * s.usdInr).toFixed(2) : '')}
-          <td><button class="btn small" data-recus="${i}" data-q="${q ?? ''}" data-p="${usd && s.usdInr ? (usd * s.usdInr).toFixed(2) : ''}" title="Record with a date, amount and note">More…</button></td></tr>`; }).join('') || '<tr><td colspan="10" class="muted">Your US basket is empty. Add stocks on the US stocks page.</td></tr>'}</tbody></table></div>
-        ${basket.length ? entryFoot('usstocks', 'quantities') : ''}</div>`;
+          ${entryCells('usstocks', x.key, x.name, q ? +q.toFixed(4) : '', usd && s.usdInr ? +(usd * s.usdInr).toFixed(2) : '')}
+          <td><button class="btn small" data-recus="${i}" data-q="${q ?? ''}" data-p="${usd && s.usdInr ? (usd * s.usdInr).toFixed(2) : ''}" title="Record with a date, amount and note">More…</button></td></tr>`; }).join('') || '<tr><td colspan="9" class="empty">Your US basket is empty. Add stocks on the US stocks page.</td></tr>'}</tbody></table></div>
+        ${basket.some((x) => !isBought('usstocks', x.key)) ? entryFoot('usstocks', 'quantities') : basket.length ? allDone('usstocks') : ''}</div>`;
     }
     return '';
   }
@@ -214,20 +240,19 @@ export async function renderPlan(main, ctx) {
     const { rows, skip, extras } = nb;
     const boughtOf = (sym) => tx.filter((t) => t.assetId === sym);
     const extraSyms = new Set(extras.map((x) => x.symbol));
-    const due = (whole ? rows.filter((r) => r.qty > 0 || boughtOf(r.symbol).length || skip.has(r.symbol)) : rows).filter((r) => !extraSyms.has(r.symbol));
+    const due = (whole ? rows.filter((r) => r.qty > 0 || skip.has(r.symbol)) : rows).filter((r) => !extraSyms.has(r.symbol) && !boughtOf(r.symbol).length);
+    const extrasTodo = extras.filter((x) => !boughtOf(x.symbol).length);
+    const boughtN = new Set(tx.map((t) => t.assetId)).size;
     const notDue = whole ? rows.filter((r) => !r.qty && !boughtOf(r.symbol).length && r.sch?.qty && !extraSyms.has(r.symbol)) : [];
     // bought this month but neither due nor added (e.g. recorded elsewhere)
-    const shown = new Set([...due.map((r) => r.symbol), ...extraSyms]);
-    const strays = [...new Set(tx.map((t) => t.assetId))].filter((sym) => !shown.has(sym)).map((sym) => { const x = S.nifty.find((n) => n.symbol === sym) || { symbol: sym }; return { ...x, qty: 0, cost: 0, stray: true }; });
     const before = whole && np.startMonth && month < np.startMonth;
     const qtyTxt = (q) => (whole ? q : num(q, 4));
-    const row = (r, kind) => { const b = boughtOf(r.symbol); const skipped = kind === 'due' && skip.has(r.symbol); const q = skipped ? 0 : r.qty; return `<tr class="${skipped ? 'muted' : ''}">
-        <td><b>${esc(r.symbol)}</b>${kind === 'extra' ? ' <span class="badge good">added this month</span>' : skipped ? ' <span class="badge">skipped</span>' : r.stray ? ' <span class="badge">bought, not planned</span>' : ''}${r.name ? `<span class="a" style="display:block">${esc(r.name)}</span>` : ''}</td>
+    const row = (r, kind) => { const skipped = kind === 'due' && skip.has(r.symbol); const q = skipped ? 0 : r.qty; return `<tr class="${skipped ? 'muted' : ''}">
+        <td><b>${esc(r.symbol)}</b>${kind === 'extra' ? ' <span class="badge good">added this month</span>' : skipped ? ' <span class="badge">skipped</span>' : ''}${r.name ? `<span class="a" style="display:block">${esc(r.name)}</span>` : ''}</td>
         ${whole ? `<td>${kind === 'extra' ? 'this month only' : esc(cadence(r.sch))}</td>` : `<td class="r">${r.weight !== undefined ? pct(r.weight) : '–'}</td>`}<td class="r">${num(r.ltp, 2)}</td>
         <td class="r">${kind === 'extra' ? `<input class="input num xq" data-sym="${esc(r.symbol)}" type="number" min="0" step="${whole ? 1 : 'any'}" value="${r.qty}" style="width:72px;padding:3px 6px" title="Change how many to buy this month">` : `<b>${skipped ? '<s>' + qtyTxt(r.qty) + '</s>' : qtyTxt(q)}</b>`}</td>
         ${np.mode === 'weekly' ? `<td class="r">${kind === 'due' && !skipped ? num(r.perWeek, 4) : '–'}</td>` : ''}<td class="r">${inr(skipped ? 0 : r.cost)}</td>
-        <td class="r">${b.length ? num(sum(b, 'units'), 4) : '–'}</td>
-        ${entryCells('nifty50', r.symbol, r.symbol, skipped || r.stray ? 0 : whole || kind === 'extra' ? q : +q.toFixed(4), r.ltp)}
+        ${entryCells('nifty50', r.symbol, r.symbol, skipped ? 0 : whole || kind === 'extra' ? q : +q.toFixed(4), r.ltp)}
         <td style="white-space:nowrap">${kind === 'extra' ? `<button class="btn small danger" data-xrm="${esc(r.symbol)}">Remove</button>` : kind === 'due' ? (skipped ? `<button class="btn small" data-unskip="${esc(r.symbol)}">Undo skip</button>` : `<button class="btn small" data-skip="${esc(r.symbol)}" title="Leave this stock out this month">Skip</button>`) : ''}</td></tr>`; };
     const left = nb.budget - nb.planned, leftToBuy = nb.budget - nb.bought;
     return `<div class="card">${head(`<button class="btn small primary" id="naddstock">+ Add a Nifty 50 stock</button><button class="btn small" id="niftyplan">Edit Nifty 50 plan</button>${whole ? '<button class="btn small" id="niftysched">Full schedule</button>' : ''}${S.me.role === 'admin' ? '<button class="btn small" id="niftyupd">Update prices</button>' : ''}<button class="btn small danger" data-drop="${line.id}">Drop</button>`)}
@@ -238,16 +263,15 @@ export async function renderPlan(main, ctx) {
           <div class="stat"><div class="k">${left < 0 ? 'Over budget by' : 'Budget remaining'}</div><div class="v ${left < 0 ? 'neg' : 'pos'}">${inr(Math.abs(left))}</div><div class="d">after the planned buys</div></div>
           <div class="stat"><div class="k">Bought so far</div><div class="v">${inr(nb.bought)}</div><div class="d">${leftToBuy < 0 ? `<span class="warn">${inr(-leftToBuy)} over budget</span>` : `${inr(leftToBuy)} left to spend`}</div></div>
         </div></div>
-      <p class="note" style="margin:0 0 10px">${whole ? `<b>${due.filter((r) => r.qty && !skip.has(r.symbol)).length} stocks due in ${esc(monthLabel(month))}</b> on your schedule (set for ${inr(np.amount || line.amount)} a month, starting ${esc(monthLabel(np.startMonth))}).${before ? ' <span class="warn">This month is before the schedule starts.</span>' : ''}` : `<b>Plan:</b> ${esc(NIFTY_MODES[np.mode])}.`}
+      <p class="note" style="margin:0 0 10px">${whole ? `<b>${due.filter((r) => r.qty && !skip.has(r.symbol)).length} stocks still to buy in ${esc(monthLabel(month))}</b>${boughtN ? ` (${boughtN} bought)` : ''} on your schedule (set for ${inr(np.amount || line.amount)} a month, starting ${esc(monthLabel(np.startMonth))}).${before ? ' <span class="warn">This month is before the schedule starts.</span>' : ''}` : `<b>Plan:</b> ${esc(NIFTY_MODES[np.mode])}.`}
         If a stock doesn't fit this month's budget, <b>Skip</b> it and use <b>+ Add a Nifty 50 stock</b> to buy another one instead. Skips and added stocks apply to ${esc(monthLabel(month))} only.</p>
-      <div class="tablewrap" style="max-height:60vh"><table class="t" id="ntable"><thead><tr><th>Stock</th>${whole ? '<th>How often</th>' : '<th class="r">Weight</th>'}<th class="r">Price</th><th class="r">${whole ? 'Shares due' : 'Qty this month'}</th>${np.mode === 'weekly' ? '<th class="r">Qty per week</th>' : ''}<th class="r">Cost</th><th class="r">Bought</th><th class="r">Qty bought</th><th class="r">Price paid</th><th class="r">Amount</th><th></th></tr></thead>
-      <tbody>${due.map((r) => row(r, 'due')).join('')}${extras.map((r) => row(r, 'extra')).join('')}${strays.map((r) => row(r, 'stray')).join('')}
-        ${!due.length && !extras.length && !strays.length ? `<tr><td colspan="11" class="muted">Nothing due this month.</td></tr>` : ''}</tbody></table></div>
-      ${entryFoot('nifty50', 'quantities')}
+      ${!due.length && !extrasTodo.length ? (boughtN ? allDone('nifty50') : '<div class="done-note">Nothing due this month.</div>') : `<div class="tablewrap" style="max-height:60vh"><table class="t" id="ntable"><thead><tr><th>Stock</th>${whole ? '<th>How often</th>' : '<th class="r">Weight</th>'}<th class="r">Price</th><th class="r">${whole ? 'Shares due' : 'Qty this month'}</th>${np.mode === 'weekly' ? '<th class="r">Qty per week</th>' : ''}<th class="r">Cost</th><th class="r">Qty bought</th><th class="r">Price paid</th><th class="r">Amount</th><th></th></tr></thead>
+      <tbody>${due.map((r) => row(r, 'due')).join('')}${extrasTodo.map((r) => row(r, 'extra')).join('')}</tbody></table></div>
+      ${entryFoot('nifty50', 'quantities')}`}
       ${notDue.length ? `<details style="margin-top:12px"><summary style="cursor:pointer"><b>Not due this month (${notDue.length})</b></summary>
         <div class="tablewrap" style="margin-top:8px"><table class="t"><thead><tr><th>Stock</th><th>How often</th><th>Next due</th></tr></thead>
         <tbody>${notDue.sort((a, b) => (a.next || '9').localeCompare(b.next || '9')).map((r) => `<tr><td><b>${esc(r.symbol)}</b></td><td>${esc(cadence(r.sch))}</td><td>${r.next ? esc(monthLabel(r.next)) : '–'}</td></tr>`).join('')}</tbody></table></div></details>` : ''}
-      <p class="note">Prices last updated ${esc((S.nifty[0]?.updated_at || '').slice(0, 10) || '–')}. Recorded purchases can be edited or deleted in the list at the bottom of the page.</p></div>`;
+      <p class="note">Prices last updated ${esc((S.nifty[0]?.updated_at || '').slice(0, 10) || '–')}. Bought stocks are listed under Bought in ${esc(monthLabel(month))}.</p></div>`;
   }
 
   // ---- wiring
@@ -322,11 +346,11 @@ export async function renderPlan(main, ctx) {
   main.querySelectorAll('[data-rsave]').forEach((b) => (b.onclick = async () => {
     const slot = b.dataset.rsave, stock = slot === 'usstocks' || slot === 'nifty50';
     const date = main.querySelector(`.rdate[data-slot="${slot}"]`).value || today();
-    const rows = [...main.querySelectorAll(`.rq[data-slot="${slot}"]`)].map((i) => ({ i, units: Number(i.value) || 0, price: Number(rowOf(i).querySelector('.rp').value) || 0, t: i.dataset.tx ? transactions.find((x) => x.id === i.dataset.tx) : null }));
+    const rows = [...main.querySelectorAll(`.rq[data-slot="${slot}"]`)].map((i) => ({ i, units: Number(i.value) || 0, price: Number(rowOf(i).querySelector('.rp').value) || 0, t: null }));
     const adds = rows.filter((e) => !e.t && e.units > 0);
     const edits = rows.filter((e) => e.t && e.units > 0 && (Math.abs(e.units - e.t.units) > 1e-9 || Math.abs(e.price - e.t.price) > 1e-9));
     const dels = rows.filter((e) => e.t && !(e.units > 0));
-    if (!adds.length && !edits.length && !dels.length) return toast(`Nothing new to save. Enter the ${stock ? 'quantity' : 'units'} you bought (or use "Fill in planned").`);
+    if (!adds.length && !edits.length && !dels.length) return toast(`Nothing to save. Enter the ${stock ? 'quantity' : 'units'} you bought (or use "Fill in planned").`);
     if ([...adds, ...edits].some((e) => !(e.price > 0))) return toast(`Every row with a ${stock ? 'quantity needs the price you paid' : 'units figure needs the NAV you got'}.`);
     const parts = [adds.length && `record ${adds.length} new purchase${adds.length > 1 ? 's' : ''} dated ${date}`, edits.length && `update ${edits.length} recorded purchase${edits.length > 1 ? 's' : ''}`, dels.length && `delete ${dels.length} purchase${dels.length > 1 ? 's' : ''} (${dels.map((e) => e.t.assetName).join(', ')})`].filter(Boolean);
     if (!confirm(`${parts.join(', ').replace(/^./, (c) => c.toUpperCase())}?`)) return;
@@ -338,6 +362,27 @@ export async function renderPlan(main, ctx) {
       toast('Saved'); rerender();
     } catch (err) { toast(err.message); }
   }));
+  const bcard = main.querySelector('#boughtcard');
+  const bChanged = (tr) => { const t = transactions.find((x) => x.id === tr.dataset.tx); const q = Number(tr.querySelector('.bq').value) || 0, p = Number(tr.querySelector('.bp').value) || 0, d = tr.querySelector('.bd').value;
+    return { t, q, p, d, changed: Math.abs(q - t.units) > 1e-9 || Math.abs(p - t.price) > 1e-9 || (d && d !== t.tradeDate) }; };
+  bcard?.querySelectorAll('.bq, .bp, .bd').forEach((i) => (i.oninput = () => {
+    const tr = i.closest('tr'), c = bChanged(tr);
+    tr.classList.toggle('changed', c.changed); tr.classList.toggle('deleting', !(c.q > 0));
+    tr.querySelector('.btot').textContent = c.q > 0 ? inr(c.q * c.p, 2) : 'will be deleted';
+    bcard.querySelector('#bsave').disabled = !bcard.querySelector('tr.changed');
+  }));
+  bcard?.querySelector('#bsave').addEventListener('click', async () => {
+    const all = [...bcard.querySelectorAll('tr[data-tx]')].map(bChanged).filter((c) => c.changed);
+    const dels = all.filter((c) => !(c.q > 0)), eds = all.filter((c) => c.q > 0);
+    if (eds.some((c) => !(c.p > 0))) return toast('Every purchase needs the price or NAV you paid.');
+    const msg = [eds.length && `Update ${eds.length} purchase${eds.length > 1 ? 's' : ''}`, dels.length && `delete ${dels.map((c) => c.t.assetName).join(', ')} (back to Still to buy)`].filter(Boolean).join(' and ');
+    if (!confirm(`${msg}?`)) return;
+    try {
+      for (const c of eds) await api('PUT', `/api/transactions/${c.t.id}`, { ...c.t, units: c.q, price: c.p, tradeDate: c.d || c.t.tradeDate, amount: null });
+      for (const c of dels) await api('DELETE', `/api/transactions/${c.t.id}`);
+      toast('Saved'); rerender();
+    } catch (e) { toast(e.message); }
+  });
   main.querySelectorAll('[data-skip]').forEach((b) => (b.onclick = async () => {
     nLine.skip = [...new Set([...(nLine.skip || []), b.dataset.skip])]; await save(`${b.dataset.skip} skipped for ${monthLabel(month)}`);
   }));

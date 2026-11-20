@@ -1,5 +1,6 @@
 // Indian and US stock dashboards, built from the Tickertape stock screener exports.
 import { esc, num, toast, openModal, possessive } from './util.js';
+import { metricPicker, guessGroup } from './picker.js';
 import { rankRows } from './ranking.js';
 import { loadDataset, companyKey, keyFieldsFor } from './tickertape.js';
 
@@ -53,7 +54,7 @@ export async function renderStocks(main, mkt, ctx) {
   const sectors = sectorCol ? [...new Set(ds.objects.map((o) => o[sectorCol]).filter(Boolean))].sort() : [];
   const usable = () => cfg.criteria.filter(([l]) => numCols.includes(l));
   const unavailable = () => cfg.criteria.filter(([l]) => !numCols.includes(l));
-  let search = '', showAll = false, sort = { key: 'rank', dir: 1 }, critFilter = '';
+  let search = '', showAll = false, sort = { key: 'rank', dir: 1 };
 
   const universe = () => {
     let rows = ds.objects;
@@ -91,42 +92,30 @@ export async function renderStocks(main, mkt, ctx) {
 
   function drawCriteria() {
     const panel = document.getElementById('scrit');
-    const active = new Map(usable().map(([l, w, d]) => [l, { w, d }]));
-    const uni = universe();
-    const cover = (c) => uni.length ? uni.filter((o) => typeof o[c] === 'number').length / uni.length : 0;
+    const cover = (c) => { const uni = universe(); return uni.length ? uni.filter((o) => typeof o[c] === 'number').length / uni.length : 0; };
     const gone = unavailable();
-    const listed = [...usable().map(([l]) => l), ...numCols.filter((c) => !active.has(c))]
-      .filter((c) => !critFilter || c.toLowerCase().includes(critFilter.toLowerCase()));
-    panel.innerHTML = `<h3>Ranking criteria</h3><p class="sub">Tick metrics, set weights, and flip ↑/↓ if the direction is wrong for a metric. The % shows how many stocks in your universe have that metric.</p>
+    panel.innerHTML = `<h3>Ranking criteria</h3><p class="sub">Each stock's score is the weighted average of its percentile on the metrics you add, within the universe you set.</p>
       ${gone.length ? `<div class="card" style="background:var(--gold-soft);border-color:transparent;padding:12px 14px"><b>Not in your current data</b><p class="note" style="margin:4px 0 8px">These saved metrics aren't in the latest import (renamed or missing), so they're left out of the score.</p>
         ${gone.map(([l], i) => `<div class="row" style="align-items:center;margin-bottom:6px"><span style="flex:1 1 100%;font-size:12.5px">${esc(l)}</span>
           <select class="input" data-swap="${i}" style="padding:3px 6px;font-size:12px"><option value="">Use another column instead…</option>${numCols.map((c) => `<option>${esc(c)}</option>`).join('')}</select>
           <button class="btn small" data-drop="${i}" style="flex:0 0 auto">Remove</button></div>`).join('')}</div>` : ''}
       ${defaults.missing.length ? `<p class="note warn">Default metrics not in your data (left out): ${esc(defaults.missing.join(', '))}. Match them on the Data page if the column was renamed.</p>` : ''}
-      ${!mcapCol ? '<p class="note warn">No market cap column mapped, so the universe is all stocks.</p>' : ''}
-      <div class="row">${mcapCol ? `<div><label class="f">Universe: top N by market cap</label><input class="input num" id="topn" type="number" min="0" step="50" value="${cfg.topN}"><span class="note">0 = all stocks</span></div>` : ''}</div>
-      <div style="margin-top:10px"><label class="f">Sectors (${cfg.sectors.length || 'all'})</label><select class="input" id="secsel"><option value="">Add a sector filter…</option>${sectors.map((s) => `<option>${esc(s)}</option>`).join('')}</select>
-        <div style="margin-top:6px">${cfg.sectors.map((s, i) => `<span class="chip">${esc(s)}<button data-sec="${i}">×</button></span>`).join('')}</div></div>
-      <div class="crit-group">Metrics (${cfg.criteria.length} selected of ${numCols.length})</div>
-      <input class="input" id="critq" placeholder="Find a metric…" value="${esc(critFilter)}" style="margin-bottom:6px">
-      <div id="critlist">${listed.map((c) => { const a = active.get(c); const d = a?.d || guessDir(c); return `
-        <div class="crit"><input type="checkbox" data-k="${esc(c)}" ${a ? 'checked' : ''}>
-          <label title="${esc(c)}">${esc(c)} <button class="btn small ghost" data-dir="${esc(c)}" style="padding:0 5px" title="Flip direction">${d === 'asc' ? '↓ better' : '↑ better'}</button></label>
-          <input class="w" type="number" min="0" step="0.5" data-w="${esc(c)}" value="${a?.w ?? 1}"></div>${a ? `<div class="note" style="margin:-2px 0 4px 26px">${cover(c) === 0 ? '<span class="warn">no data in this universe: not scoring</span>' : `${Math.round(cover(c) * 100)}% of stocks have it`}</div>` : ''}`; }).join('')}</div>
-      <div class="row" style="margin-top:14px"><button class="btn primary" id="ssave">Save criteria</button><button class="btn" id="sreset">Reset to default</button></div>`;
-    const dirs = new Map(listed.map((c) => [c, active.get(c)?.d || guessDir(c)]));
-    const collect = () => {
-      const criteria = [];
-      panel.querySelectorAll('#critlist input[type=checkbox]').forEach((c) => {
-        const k = c.dataset.k;
-        if (c.checked) criteria.push([k, Number(panel.querySelector(`[data-w="${CSS.escape(k)}"]`).value) || 0, dirs.get(k)]);
-      });
-      // keep selected metrics hidden by the metric search, and saved ones not in this data
-      for (const [l, w, d] of cfg.criteria) if (!listed.includes(l)) criteria.push([l, w, d]);
-      cfg.criteria = criteria;
-      const t = document.getElementById('topn'); if (t) cfg.topN = Number(t.value) || 0;
-    };
-    panel.querySelectorAll('#critlist input, #topn').forEach((i) => (i.onchange = () => { collect(); drawTable(); }));
+      <div class="filterbox"><div class="crit-group" style="margin-top:0">Filters</div>
+        ${mcapCol ? `<div><label class="f">Universe: top N by market cap <span class="muted">(0 = all)</span></label><input class="input num" id="topn" type="number" min="0" step="50" value="${cfg.topN}"></div>` : '<p class="note warn">No market cap column mapped, so the universe is all stocks.</p>'}
+        ${sectors.length ? `<div style="margin-top:10px"><label class="f">Sectors</label><select class="input" id="secsel"><option value="">${cfg.sectors.length ? '+ Add another sector…' : 'All sectors · pick one to filter…'}</option>${sectors.filter((x) => !cfg.sectors.includes(x)).map((x) => `<option>${esc(x)}</option>`).join('')}</select>
+          ${cfg.sectors.length ? `<div class="chips" style="margin-top:6px">${cfg.sectors.map((x, i) => `<span class="chip">${esc(x)}<button data-sec="${i}" aria-label="Remove">×</button></span>`).join('')}</div>` : ''}</div>` : ''}
+      </div>
+      <div class="crit-group">Scoring on</div>
+      <div id="mpick"></div>
+      <div class="row tight" style="margin-top:14px"><button class="btn primary" id="ssave">Save criteria</button><button class="btn ghost" id="sreset">Reset to default</button></div>`;
+    const picker = metricPicker(panel.querySelector('#mpick'), {
+      items: numCols.map((c) => ({ key: c, label: c, group: guessGroup(c) })),
+      selected: usable().map(([l, w, d]) => ({ key: l, w, d: d || guessDir(l) })),
+      dirOf: guessDir,
+      cover,
+      onChange: (sel) => { const g = unavailable(); cfg.criteria = [...sel.map((x) => [x.key, x.w, x.d]), ...g]; drawTable(); },
+    });
+    panel.querySelector('#topn')?.addEventListener('change', (e) => { cfg.topN = Number(e.target.value) || 0; picker.refresh(); drawTable(); });
     panel.querySelectorAll('[data-drop]').forEach((b) => (b.onclick = () => { const l = gone[+b.dataset.drop][0]; cfg.criteria = cfg.criteria.filter(([x]) => x !== l); drawCriteria(); drawTable(); }));
     panel.querySelectorAll('[data-swap]').forEach((sel) => (sel.onchange = () => {
       if (!sel.value) return;
@@ -134,20 +123,16 @@ export async function renderStocks(main, mkt, ctx) {
       cfg.criteria = cfg.criteria.filter(([x]) => x !== l && x !== sel.value).concat([[sel.value, w, guessDir(sel.value)]]);
       drawCriteria(); drawTable();
     }));
-    panel.querySelectorAll('[data-dir]').forEach((b) => (b.onclick = () => {
-      const k = b.dataset.dir; dirs.set(k, dirs.get(k) === 'asc' ? 'desc' : 'asc');
-      b.textContent = dirs.get(k) === 'asc' ? '↓ better' : '↑ better'; collect(); drawTable();
-    }));
-    document.getElementById('critq').oninput = (e) => { collect(); critFilter = e.target.value; drawCriteria(); document.getElementById('critq').focus(); };
-    document.getElementById('secsel').onchange = (e) => { if (e.target.value && !cfg.sectors.includes(e.target.value)) cfg.sectors.push(e.target.value); drawCriteria(); drawTable(); };
+    panel.querySelector('#secsel')?.addEventListener('change', (e) => { if (e.target.value && !cfg.sectors.includes(e.target.value)) cfg.sectors.push(e.target.value); drawCriteria(); drawTable(); });
     panel.querySelectorAll('[data-sec]').forEach((b) => (b.onclick = () => { cfg.sectors.splice(+b.dataset.sec, 1); drawCriteria(); drawTable(); }));
-    document.getElementById('ssave').onclick = async () => { collect(); await saveSettings({ stockCriteria: { ...S.settings.stockCriteria, [mkt]: { criteria: cfg.criteria, topN: cfg.topN, sectors: cfg.sectors } } }, 'Criteria saved'); };
+    document.getElementById('ssave').onclick = async () => { await saveSettings({ stockCriteria: { ...S.settings.stockCriteria, [mkt]: { criteria: cfg.criteria, topN: cfg.topN, sectors: cfg.sectors } } }, 'Criteria saved'); };
     document.getElementById('sreset').onclick = async () => {
       const sc = { ...S.settings.stockCriteria }; delete sc[mkt];
       await saveSettings({ stockCriteria: sc }, 'Back to the default criteria');
       cfg.criteria = defaultCriteria(ds, numCols).criteria; cfg.topN = 500; cfg.sectors = []; drawCriteria(); drawTable();
     };
   }
+
 
   function drawTable() {
     const ranked = rankRows(universe(), usable());

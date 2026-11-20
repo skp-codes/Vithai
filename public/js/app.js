@@ -3,6 +3,7 @@ import { api, esc, inr, num, pct, signCls, today, thisMonth, monthLabel, toast, 
 import { METRICS, SLOTS, DEFAULT_CRITERIA, rankFunds } from './ranking.js';
 import { renderStocks, usPriceLookup } from './stocks.js'; // eslint-disable-line no-unused-vars
 import { renderPlan, recordModal } from './plan.js';
+import { metricPicker, guessGroup } from './picker.js';
 import { nameKey, cleanName } from './names.js';
 import { guessDir } from './stocks.js';
 import { KINDS, readExport, mergeParts, toDataset, uploadDataset, loadDataset, clearDatasetCache, mfFactsRows, niftyPricesFrom, saveMfFacts, autoMap, keyFieldsFor, defaultLabel, getColumnMap, saveColumnMap } from './tickertape.js';
@@ -117,9 +118,11 @@ function renderShell() {
   const nav = routes().map(([k, label]) => `<a href="#/${k}" class="${S.route === k ? 'on' : ''}"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICONS[k]}</svg><span>${label}</span>${k === 'site' || k === 'household' ? `<b class="nbadge" data-badge="${k}" hidden></b>` : ''}</a>`).join('');
   app.innerHTML = `<div class="shell">
     <aside class="rail">
-      <div class="brand"><h1>VITHAI</h1><p>Plant monthly, grow steadily</p></div>
+      <div class="brand"><div class="logo"><svg width="20" height="20" viewBox="0 0 32 32"><path d="M9 22c3-1 4-4 5-8s3-6 6-6c-1 3-1 5 1 7s2 5-1 7c-3 2-8 1-11 0z" fill="#fff"/></svg></div><div><h1>VITHAI</h1><p>Plant monthly, grow steadily</p></div></div>
       <nav class="nav">${nav}</nav>
-      <div class="rail-foot"><div class="who">${esc(S.me.name)} <span class="muted">@${esc(S.me.username)}</span></div><div>${esc(S.me.householdName)}</div><button id="logout">Sign out</button></div>
+      <div class="rail-foot"><div class="avatar">${esc((S.me.name || S.me.username || '?').trim().charAt(0).toUpperCase())}</div>
+        <div style="min-width:0"><div class="who" title="@${esc(S.me.username)}">${esc(S.me.name)}</div><div class="hh">${esc(S.me.householdName)}</div></div>
+        <button id="logout" title="Sign out" aria-label="Sign out"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg></button></div>
     </aside>
     <main id="main"></main></div>`;
   document.getElementById('logout').onclick = async () => { await api('POST', '/api/auth/logout'); location.hash = ''; location.reload(); };
@@ -261,7 +264,6 @@ function renderSetup(main) {
 // ---------------------------------------------------------------- FUND DASHBOARD
 let fundSort = { key: 'rank', dir: 1 };
 let fundSearch = '';
-let ttQuery = '';
 function renderFunds(main) {
   const slot = S.fundsTab;
   const cfg = slotConfig(slot);
@@ -297,60 +299,46 @@ function renderFunds(main) {
 
   function drawCriteria() {
     const panel = document.getElementById('critpanel');
-    const active = new Map(cfg.criteria.map(([k, w]) => [k, w]));
-    const dirOf = new Map(cfg.criteria.map(([k, , d]) => [k, d || metricOf(k)?.dir || 'desc']));
-    const groups = {};
-    for (const [k, m] of Object.entries(METRICS)) (groups[m.group] ||= []).push(k);
-    const ttKeys = Object.keys(TT_METRICS);
     const subs = SUB_OPTIONS[slot];
-    const pool = eligibleFunds(slot, cfg);
-    const cover = (k) => pool.length ? pool.filter((f) => typeof f[k] === 'number').length / pool.length : 0;
-    const coverNote = (k) => `<div class="note" style="margin:-2px 0 4px 26px">${cover(k) === 0 ? '<span class="warn">no data for these funds: not scoring</span>' : `${Math.round(cover(k) * 100)}% of funds have it`}</div>`;
-    const noData = [...active.keys()].filter((k) => metricOf(k) && cover(k) === 0);
-    const gone = [...active.keys()].filter((k) => !metricOf(k));
-    const line = (k) => { const m = metricOf(k); const d = dirOf.get(k) || m.dir; return `
-        <div class="crit" data-row="${esc(k)}"><input type="checkbox" data-k="${esc(k)}" ${active.has(k) ? 'checked' : ''} id="c_${esc(k)}">
-        <label for="c_${esc(k)}">${esc(m.label)}</label><button type="button" class="dirbtn" data-dir="${esc(k)}" data-d="${d}" title="Click to flip: is a higher or lower value better?">${d === 'asc' ? '↓ better' : '↑ better'}</button>
-        <input class="w" type="number" min="0" step="0.5" data-w="${esc(k)}" value="${active.get(k) ?? 1}" aria-label="Weight for ${esc(m.label)}"></div>${active.has(k) ? coverNote(k) : ''}`; };
-    const ttSorted = [...ttKeys.filter((k) => active.has(k)), ...ttKeys.filter((k) => !active.has(k))];
-    panel.innerHTML = `<h3>Ranking criteria</h3><p class="sub">Tick the metrics to score on, set their weight, and click ↑/↓ to say whether higher or lower is better. Each fund's score is the weighted average of its percentile on each metric; funds missing a metric are scored on the rest.</p>
-      <div class="row"><div><label class="f">Minimum age (years)</label><input class="input num" id="minage" type="number" min="0" step="1" value="${cfg.minAge}"></div></div>
-      ${subs ? `<div class="crit-group">Include</div>${subs.map((s) => `<label class="toggle" style="margin-right:14px"><input type="checkbox" class="subchk" value="${s}" ${cfg.sub.includes(s) ? 'checked' : ''}>${s}</label>`).join('')}` : ''}
-      <div style="margin-top:10px"><label class="toggle"><input type="checkbox" id="hideclosed" ${cfg.hideClosed ? 'checked' : ''}>Hide funds marked closed to new SIPs</label></div>
-      ${Object.entries(groups).map(([g, keys]) => `<div class="crit-group">${g}</div>${keys.map(line).join('')}`).join('')}
-      <div class="crit-group">From your Tickertape data (${ttKeys.length} column${ttKeys.length === 1 ? '' : 's'}${ttKeys.length ? `, ${S.ttMatched || 0} funds matched` : ''})</div>
-      ${ttKeys.length ? `<input class="input" id="ttq" placeholder="Search ${ttKeys.length} columns…" style="margin:4px 0 6px;padding:5px 8px;font-size:13px" value="${esc(ttQuery)}">
-        <div id="ttlist" style="max-height:340px;overflow:auto">${ttSorted.map(line).join('')}</div>
-        <p class="note">Every number column in the mutual fund export. Where lower is better, a 0 is treated as "no data" because Tickertape writes 0 for missing values.</p>`
-        : `<p class="note">Load your Tickertape mutual fund export on the <a href="#/data">Data</a> page to rank on any of its columns too.</p>`}
+    const pool = () => eligibleFunds(slot, cfg);
+    const cover = (k) => { const p = pool(); return p.length ? p.filter((f) => typeof f[k] === 'number').length / p.length : 0; };
+    const gone = cfg.criteria.filter(([k]) => !metricOf(k)).map(([k]) => k);
+    const ttKeys = Object.keys(TT_METRICS);
+    const items = [
+      ...Object.entries(METRICS).map(([k, m]) => ({ key: k, label: m.label, group: m.group })),
+      ...ttKeys.map((k) => ({ key: k, label: TT_METRICS[k].label, group: `Tickertape: ${guessGroup(TT_METRICS[k].label)}` })),
+    ];
+    panel.innerHTML = `<h3>Ranking criteria</h3>
+      <p class="sub">Each fund's score is the weighted average of its percentile on each metric you add. Funds missing a metric are scored on the rest.</p>
+      <div class="filterbox"><div class="crit-group" style="margin-top:0">Filters</div>
+        <div class="row tight" style="align-items:flex-end;flex-wrap:wrap">
+          <div style="flex:0 0 130px"><label class="f">Minimum age (yrs)</label><input class="input num" id="minage" type="number" min="0" step="1" value="${cfg.minAge}"></div>
+          <label class="toggle" style="flex:1 1 200px;margin-bottom:8px"><input type="checkbox" id="hideclosed" ${cfg.hideClosed ? 'checked' : ''}>Hide funds closed to new SIPs</label></div>
+        ${subs ? `<div class="chips">${subs.map((x) => `<label class="pill ${cfg.sub.includes(x) ? 'on' : ''}"><input type="checkbox" class="subchk" value="${x}" ${cfg.sub.includes(x) ? 'checked' : ''}>${x}</label>`).join('')}</div>` : ''}
+      </div>
+      <div class="crit-group">Scoring on</div>
+      <div id="mpick"></div>
+      ${ttKeys.length ? '' : `<p class="note">Load your Tickertape mutual fund export on the <a href="#/data">Data</a> page to rank on any of its columns too.</p>`}
       ${gone.length ? `<p class="note warn" style="margin-top:10px">${gone.length} saved metric${gone.length > 1 ? 's are' : ' is'} not in your current data (${gone.map((k) => esc(k.replace(/^tt:/, ''))).join(', ')}) and left out. <button class="btn small" id="dropgone">Remove</button></p>` : ''}
-      ${noData.length ? `<p class="note warn" style="margin-top:10px">${noData.length} ticked metric${noData.length > 1 ? 's have' : ' has'} no data for these funds (${noData.map((k) => esc(metricOf(k).label)).join(', ')}) and ${noData.length > 1 ? 'are' : 'is'} not scoring. <button class="btn small" id="dropempty">Untick them</button></p>` : ''}
-      <div class="row" style="margin-top:14px"><button class="btn primary" id="savecrit">Save criteria</button><button class="btn" id="resetcrit">Reset to Vithai default</button></div>`;
-    const filterTT = () => {
-      const q = (document.getElementById('ttq')?.value || '').toLowerCase();
-      panel.querySelectorAll('#ttlist .crit').forEach((r) => { const k = r.dataset.row; const show = !q || active.has(k) || TT_METRICS[k].label.toLowerCase().includes(q); r.style.display = show ? '' : 'none'; if (r.nextElementSibling?.classList.contains('note')) r.nextElementSibling.style.display = show ? '' : 'none'; });
+      <div class="row tight" style="margin-top:14px"><button class="btn primary" id="savecrit">Save criteria</button><button class="btn ghost" id="resetcrit">Reset to default</button></div>`;
+    const keepGone = () => cfg.criteria.filter(([k]) => gone.includes(k));
+    const picker = metricPicker(panel.querySelector('#mpick'), {
+      items,
+      selected: cfg.criteria.filter(([k]) => metricOf(k)).map(([k, w, d]) => ({ key: k, w, d: d || metricOf(k).dir })),
+      dirOf: (k) => metricOf(k).dir,
+      cover,
+      onChange: (sel) => { cfg.criteria = [...sel.map(({ key, w, d }) => (d !== metricOf(key).dir ? [key, w, d] : [key, w])), ...keepGone()]; drawTable(true); },
+    });
+    const filters = () => {
+      cfg.minAge = Number(document.getElementById('minage').value) || 0;
+      cfg.hideClosed = document.getElementById('hideclosed').checked;
+      if (subs) cfg.sub = [...panel.querySelectorAll('.subchk:checked')].map((c) => c.value);
+      panel.querySelectorAll('.pill').forEach((l) => l.classList.toggle('on', l.querySelector('input').checked));
+      picker.refresh(); drawTable(true);
     };
-    filterTT();
-    const collect = () => {
-      const criteria = [];
-      panel.querySelectorAll('input[type=checkbox][data-k]').forEach((c) => {
-        if (!c.checked) return;
-        const k = c.dataset.k, d = panel.querySelector(`[data-dir="${CSS.escape(k)}"]`).dataset.d;
-        const w = Number(panel.querySelector(`[data-w="${CSS.escape(k)}"]`).value) || 0;
-        criteria.push(d !== metricOf(k).dir ? [k, w, d] : [k, w]);
-      });
-      for (const k of gone) criteria.push(cfg.criteria.find(([x]) => x === k)); // keep until removed
-      const sub = subs ? [...panel.querySelectorAll('.subchk:checked')].map((c) => c.value) : [];
-      return { minAge: Number(document.getElementById('minage').value) || 0, sub, criteria, hideClosed: document.getElementById('hideclosed').checked };
-    };
-    const refresh = () => { Object.assign(cfg, collect()); drawCriteria(); drawTable(true); };
-    panel.querySelectorAll('input:not(#ttq)').forEach((i) => (i.onchange = refresh));
-    panel.querySelectorAll('.dirbtn').forEach((b) => (b.onclick = () => { b.dataset.d = b.dataset.d === 'asc' ? 'desc' : 'asc'; refresh(); }));
-    const tq = document.getElementById('ttq');
-    if (tq) tq.oninput = () => { ttQuery = tq.value; filterTT(); };
-    document.getElementById('dropempty')?.addEventListener('click', () => { cfg.criteria = cfg.criteria.filter(([k]) => !noData.includes(k)); drawCriteria(); drawTable(true); });
+    panel.querySelectorAll('#minage, #hideclosed, .subchk').forEach((i) => (i.onchange = filters));
     document.getElementById('dropgone')?.addEventListener('click', () => { cfg.criteria = cfg.criteria.filter(([k]) => !gone.includes(k)); drawCriteria(); drawTable(true); });
-    document.getElementById('savecrit').onclick = async () => { await saveSettings({ criteria: { ...S.settings.criteria, [slot]: collect() } }, 'Criteria saved'); renderFunds(main); };
+    document.getElementById('savecrit').onclick = async () => { await saveSettings({ criteria: { ...S.settings.criteria, [slot]: { minAge: cfg.minAge, sub: cfg.sub, criteria: cfg.criteria, hideClosed: cfg.hideClosed } } }, 'Criteria saved'); renderFunds(main); };
     document.getElementById('resetcrit').onclick = async () => { const c = { ...S.settings.criteria }; delete c[slot]; await saveSettings({ criteria: c }, 'Back to the Vithai default'); renderFunds(main); };
   }
 
