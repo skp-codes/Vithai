@@ -170,7 +170,9 @@ table.t tr.deleting .btot { color: var(--bad); font-family: var(--ui); font-size
 .card.bought { border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); background: linear-gradient(180deg, color-mix(in srgb, var(--accent-soft) 55%, var(--card)), var(--card) 120px); }
 
 /* ---------- funds & stocks: criteria panel ---------- */
-.funds-layout { display: grid; grid-template-columns: 340px 1fr; gap: 20px; align-items: start; }
+.funds-layout { display: grid; grid-template-columns: 340px minmax(0, 1fr); gap: 20px; align-items: start; }
+.funds-layout > *, .grid2 > *, main > * { min-width: 0; }
+.sh { display: none; }
 .criteria { position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow: auto; }
 .crit-group { font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); margin: 16px 0 8px; font-weight: 700; }
 .filterbox { background: var(--head); border-radius: var(--radius-s); padding: 12px 14px; }
@@ -201,6 +203,13 @@ table.t tr.deleting .btot { color: var(--bad); font-family: var(--ui); font-size
 .mp-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; font-size: 12.5px; color: var(--muted); }
 .mp-head b { color: var(--ink); }
 .mp-rows { display: grid; gap: 6px; }
+.mpick.collapsed .mp-rows, .mpick.collapsed .mp-foot { display: none; }
+.mpick:not(.collapsed) .mp-summary { display: none; }
+.mp-summary { display: flex; flex-wrap: wrap; gap: 5px; width: 100%; text-align: left; border: 1px dashed var(--line); background: var(--head); border-radius: var(--radius-s); padding: 9px 10px; cursor: pointer; }
+.mp-summary:hover { border-color: var(--accent); }
+.mp-summary span { font-size: 11.5px; font-weight: 550; padding: 2px 8px; border-radius: 999px; background: var(--card); border: 1px solid var(--line); }
+.mp-summary span.more { background: none; border: 0; color: var(--muted); font-weight: 500; }
+.mp-foot { margin-top: 6px; text-align: right; }
 .mp-row { display: grid; grid-template-columns: 1fr auto auto auto; gap: 6px; align-items: center; padding: 7px 8px 7px 12px; border: 1px solid var(--line); border-radius: var(--radius-s); background: var(--card); transition: border-color .15s; }
 .mp-row:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }
 .mp-name { font-size: 12.5px; font-weight: 550; min-width: 0; overflow-wrap: anywhere; line-height: 1.3; }
@@ -275,9 +284,20 @@ table.t tr.deleting .btot { color: var(--bad); font-family: var(--ui); font-size
   .nbadge { position: absolute; top: 0; right: 0; min-width: 15px; height: 15px; font-size: 10px; padding: 0 4px; }
   main { padding: 20px 14px 50px; }
   .page-head h2 { font-size: 22px; }
-  .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-  .stat { padding: 12px 14px; }
-  .stat .v { font-size: 18px; }
+  html, body { overflow-x: hidden; }
+  .lg { display: none; } .sh { display: inline; }
+  .stats { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .stat { padding: 10px 10px 10px 12px; border-radius: 12px; }
+  .stat::before { width: 3px; }
+  .stat .k { font-size: 9.5px; letter-spacing: .04em; line-height: 1.25; }
+  .stat .v { font-size: 15px; letter-spacing: -.03em; overflow-wrap: anywhere; }
+  .stat .d { font-size: 10.5px; line-height: 1.3; }
+  .funds-layout { grid-template-columns: minmax(0, 1fr); }
+  .planacts { flex-wrap: nowrap; }
+  .planacts .btn { padding: 7px 10px; font-size: 12.5px; }
+  .sechead .row { flex-wrap: nowrap; justify-content: flex-start; overflow-x: auto; scrollbar-width: none; }
+  .sechead .row { gap: 4px; }
+  .sechead .row .btn.small { padding: 5px 7px; font-size: 11.5px; }
   .card { padding: 16px; }
   .auth { grid-template-columns: 1fr; }
   .auth .hero { padding: 32px 22px; }

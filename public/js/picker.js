@@ -15,6 +15,7 @@ const GROUPS = [
   ['Size & trading', /market cap|mcap|volume|turnover|aum|size|shares outstanding|float|price|nav/i],
   ['Costs', /expense|exit load|ter\b/i],
 ];
+let expanded = false; // remembered for the session, across pages
 export const guessGroup = (label) => (GROUPS.find(([, re]) => re.test(label)) || ['Other'])[0];
 
 /**
@@ -35,16 +36,30 @@ export function metricPicker(host, o) {
 
   host.classList.add('mpick');
   host.innerHTML = `<div class="mp-head"><span><b>${sel.length}</b> of ${o.items.length} metrics in the score</span>
-      <span class="mp-acts"><button type="button" class="btn small ghost danger" data-mp="clear" title="Remove every metric from the score">Clear all</button><button type="button" class="btn small primary" data-mp="open">+ Add metrics</button></span></div>
+      <span class="mp-acts"><button type="button" class="btn small" data-mp="toggle" aria-expanded="false"></button><button type="button" class="btn small primary" data-mp="open">+ Add</button></span></div>
+    <button type="button" class="mp-summary" data-mp="sum" title="Show and edit the metrics"></button>
     <div class="mp-pop" hidden>
       <div class="mp-popbar"><input class="input" placeholder="Search ${o.items.length} metrics…" data-mp="q"><button type="button" class="btn small" data-mp="close">Done</button></div>
       <div class="mp-list"></div></div>
-    <div class="mp-rows"></div>`;
+    <div class="mp-rows"></div>
+    <div class="mp-foot"><button type="button" class="btn small ghost danger" data-mp="clear" title="Remove every metric from the score">Clear all metrics</button></div>`;
   const rowsEl = host.querySelector('.mp-rows'), pop = host.querySelector('.mp-pop'), listEl = host.querySelector('.mp-list'), qEl = host.querySelector('[data-mp=q]');
   const clearBtn = host.querySelector('[data-mp=clear]');
   const emit = () => { host.querySelector('.mp-head b').textContent = sel.length; clearBtn.hidden = !sel.length; o.onChange(sel.map((x) => ({ ...x }))); };
 
+  const toggleBtn = host.querySelector('[data-mp=toggle]'), sumEl = host.querySelector('[data-mp=sum]');
+  const label = (k) => byKey.get(k)?.label || k;
+  const drawState = () => {
+    host.classList.toggle('collapsed', !expanded);
+    toggleBtn.textContent = expanded ? 'Hide ▴' : 'Edit ▾';
+    toggleBtn.setAttribute('aria-expanded', String(expanded));
+    const names = sel.map((x) => label(x.key));
+    sumEl.innerHTML = names.length ? `${names.slice(0, 4).map((n) => `<span>${esc(n)}</span>`).join('')}${names.length > 4 ? `<span class="more">+${names.length - 4} more</span>` : ''}` : '<span class="more">None yet. Use + Add to choose metrics.</span>';
+  };
+  toggleBtn.onclick = () => { expanded = !expanded; drawState(); };
+  sumEl.onclick = () => { expanded = true; drawState(); };
   const drawRows = () => {
+    drawState();
     rowsEl.innerHTML = sel.length ? sel.map((x, i) => {
       const it = byKey.get(x.key); const c = o.cover?.(x.key);
       return `<div class="mp-row" data-i="${i}">
@@ -81,10 +96,10 @@ export function metricPicker(host, o) {
     if (v) { drawList(); qEl.focus(); document.addEventListener('mousedown', outside); document.addEventListener('keydown', esc_); }
     else { document.removeEventListener('mousedown', outside); document.removeEventListener('keydown', esc_); }
   };
-  host.querySelector('[data-mp=open]').onclick = () => setOpen(!open);
+  host.querySelector('[data-mp=open]').onclick = () => { if (!open) { expanded = true; drawState(); } setOpen(!open); };
   host.querySelector('[data-mp=close]').onclick = () => setOpen(false);
   clearBtn.hidden = !sel.length;
-  clearBtn.onclick = () => { if (!confirm(`Remove all ${sel.length} metrics from the score? You can add them back, or use Reset to Vithai default.`)) return; sel = []; drawRows(); if (open) drawList(); emit(); };
+  clearBtn.onclick = () => { if (!confirm(`Remove all ${sel.length} metrics from the score? You can add them back, or switch the Filter back to one you've saved.`)) return; sel = []; drawRows(); if (open) drawList(); emit(); };
   qEl.oninput = () => { query = qEl.value; drawList(); };
   drawRows();
   return { refresh: drawRows };

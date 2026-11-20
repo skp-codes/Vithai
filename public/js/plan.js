@@ -157,8 +157,8 @@ export async function renderPlan(main, ctx) {
       <div class="stat"><div class="k">Recorded</div><div class="v">${inr(recorded)}</div><div class="d">${planned ? Math.round(recorded / planned * 100) : 0}% of plan</div></div>
       <div class="stat"><div class="k">${recorded > planned ? 'Over plan by' : 'Still to invest'}</div><div class="v ${recorded > planned ? 'warn' : ''}">${inr(Math.abs(planned - recorded))}</div><div class="d">${recorded > planned ? 'extra purchases this month' : 'left in this month\'s budget'}</div></div>
     </div>
-    ${draft ? '' : `<div class="row tight" style="margin-bottom:16px;flex-wrap:wrap">${previous ? `<button class="btn" id="copyprev">Replace with ${esc(monthLabel(previous.month))}'s plan</button>` : ''}
-      <button class="btn" id="rebuild">Rebuild from my allocation</button><button class="btn danger" id="delplan">Delete this month's plan</button></div>`}
+    ${draft ? '' : `<div class="row tight planacts" style="margin-bottom:16px">${previous ? `<button class="btn" id="copyprev">Replace with ${esc(monthLabel(previous.month))}'s plan</button>` : ''}
+      <button class="btn" id="rebuild"><span class="lg">Rebuild from my allocation</span><span class="sh">Rebuild from allocation</span></button><button class="btn danger" id="delplan"><span class="lg">Delete this month's plan</span><span class="sh">Delete plan</span></button></div>`}
     <div class="group-title"><h3>Still to buy in ${esc(monthLabel(month))}</h3><span class="muted">${pendingCount()} item${pendingCount() === 1 ? '' : 's'} left</span></div>
     ${ORDER.filter((slot) => lines.some((l) => l.slot === slot) || FUND_SECTIONS.includes(slot) || slot === 'nifty50' || (slot === 'usstocks' && s.usSlot)).map(section).join('')}
     ${boughtCard()}`;
@@ -255,7 +255,7 @@ export async function renderPlan(main, ctx) {
         ${entryCells('nifty50', r.symbol, r.symbol, skipped ? 0 : whole || kind === 'extra' ? q : +q.toFixed(4), r.ltp)}
         <td style="white-space:nowrap">${kind === 'extra' ? `<button class="btn small danger" data-xrm="${esc(r.symbol)}">Remove</button>` : kind === 'due' ? (skipped ? `<button class="btn small" data-unskip="${esc(r.symbol)}">Undo skip</button>` : `<button class="btn small" data-skip="${esc(r.symbol)}" title="Leave this stock out this month">Skip</button>`) : ''}</td></tr>`; };
     const left = nb.budget - nb.planned, leftToBuy = nb.budget - nb.bought;
-    return `<div class="card">${head(`<button class="btn small primary" id="naddstock">+ Add a Nifty 50 stock</button><button class="btn small" id="niftyplan">Edit Nifty 50 plan</button>${whole ? '<button class="btn small" id="niftysched">Full schedule</button>' : ''}${S.me.role === 'admin' ? '<button class="btn small" id="niftyupd">Update prices</button>' : ''}<button class="btn small danger" data-drop="${line.id}">Drop</button>`)}
+    return `<div class="card">${head(`<button class="btn small primary" id="naddstock">+ <span class="lg">Add a Nifty 50 stock</span><span class="sh">Stock</span></button><button class="btn small" id="niftyplan"><span class="lg">Edit Nifty 50 plan</span><span class="sh">Edit plan</span></button>${whole ? '<button class="btn small" id="niftysched"><span class="lg">Full schedule</span><span class="sh">Schedule</span></button>' : ''}${S.me.role === 'admin' ? '<button class="btn small" id="niftyupd"><span class="lg">Update prices</span><span class="sh">Prices</span></button>' : ''}<button class="btn small danger" data-drop="${line.id}">Drop</button>`)}
       <div class="row" style="align-items:flex-end;margin-bottom:10px;flex-wrap:wrap">
         <div style="flex:0 0 190px"><label class="f">Budget this month (₹)</label><input class="input num amt" data-line="${line.id}" type="number" min="0" step="100" value="${line.amount}"></div>
         <div class="stats" style="flex:1 1 460px;margin:0">
