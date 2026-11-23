@@ -195,6 +195,8 @@ table.t tr.deleting .btot { color: var(--bad); font-family: var(--ui); font-size
 .dirbtn { font-family: var(--mono); font-size: 10px; color: var(--muted); background: none; border: 1px solid var(--line); border-radius: 5px; padding: 2px 5px; cursor: pointer; white-space: nowrap; }
 .toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
 .search { min-width: 220px; max-width: 320px; }
+.infonote { background: color-mix(in srgb, #3b82f6 9%, var(--card)); border: 1px solid color-mix(in srgb, #3b82f6 28%, var(--line)); border-radius: var(--radius-s); padding: 10px 14px; font-size: 12.5px; margin-bottom: 12px; line-height: 1.5; }
+.infonote a { font-weight: 650; }
 .pick-box { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; background: linear-gradient(135deg, var(--accent-soft), color-mix(in srgb, var(--accent-soft) 40%, var(--card))); color: var(--accent-ink); border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent); border-radius: var(--radius); padding: 14px 18px; margin-bottom: 14px; }
 .pick-box b { color: var(--ink); }
 

@@ -82,3 +82,8 @@ export function waitForXLSX() {
 
 // "Sharath" -> "Sharath's", "James" -> "James'"; used for page titles like "Sharath's portfolio"
 export const possessive = (name) => { const n = String(name || 'My').trim(); return /s$/i.test(n) ? `${n}'` : `${n}'s`; };
+
+// Value Research publishes a weekly list of the international funds open for lump sums and SIPs.
+// The article's address changes every week, so this searches for the latest one.
+export const VR_TRACKER_URL = 'https://www.google.com/search?q=' + encodeURIComponent('site:valueresearchonline.com international funds open') + '&tbs=qdr:m';
+export const vrTrackerNote = (extra = '') => `<div class="infonote">🌍 Most international funds are closed to new money because of India's overseas investment limits. <a href="${VR_TRACKER_URL}" target="_blank" rel="noopener">See which are open this week (Value Research tracker) ↗</a>${extra}</div>`;

@@ -1,5 +1,5 @@
 // Vithai front-end: a small single-page app with hash routes.
-import { api, esc, inr, num, pct, signCls, today, thisMonth, monthLabel, toast, openModal, xirr, waitForXLSX, possessive } from './util.js'; // eslint-disable-line no-unused-vars
+import { api, esc, inr, num, pct, signCls, today, thisMonth, monthLabel, toast, openModal, xirr, waitForXLSX, possessive, vrTrackerNote } from './util.js'; // eslint-disable-line no-unused-vars
 import { METRICS, SLOTS, DEFAULT_CRITERIA, rankFunds } from './ranking.js';
 import { renderStocks, usPriceLookup } from './stocks.js'; // eslint-disable-line no-unused-vars
 import { renderPlan, recordModal } from './plan.js';
@@ -330,6 +330,7 @@ function renderFunds(main) {
     <div class="funds-layout">
       <div class="card criteria" id="critpanel"></div>
       <div>
+        ${slot === 'international' ? vrTrackerNote(' Then confirm in Coin before investing.') : ''}
         <div class="pick-box">${chosen.fund
           ? `<div>Your ${SLOTS[slot].label.toLowerCase()} fund: <b>${esc(chosen.fund.name)}</b> ${chosen.pinned ? '<span class="badge">pinned</span>' : `<span class="badge good">top ranked · ${esc(filterName(S, scope, defaultIdFor(S, scope)))}</span>`}</div>${chosen.pinned ? '<button class="btn small" id="unpin">Use top-ranked instead</button>' : ''}`
           : '<div>No eligible funds with the current filters.</div>'}</div>

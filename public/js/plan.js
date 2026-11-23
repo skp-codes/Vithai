@@ -1,7 +1,7 @@
 // Monthly plan: a saved plan per person per month, with several funds per section, a Nifty 50
 // share schedule (like the Excel "Monthly Schedule" sheet), the US basket, and recording/editing
 // of what was actually bought.
-import { api, esc, inr, num, pct, today, thisMonth, monthLabel, toast, openModal, waitForXLSX, possessive } from './util.js';
+import { api, esc, inr, num, pct, today, thisMonth, monthLabel, toast, openModal, waitForXLSX, possessive, vrTrackerNote } from './util.js';
 import { SLOTS } from './ranking.js';
 import { loadDataset } from './tickertape.js';
 import { usPriceLookup } from './stocks.js';
@@ -204,6 +204,7 @@ export async function renderPlan(main, ctx) {
     if (FUND_SECTIONS.includes(slot)) {
       const todo = ls.filter((l) => !isBought(slot, l.assetId));
       return `<div class="card">${head(`<button class="btn small" data-add="${slot}">+ Add ${slot === 'gold' ? 'gold fund / ETF' : 'fund'} or extra purchase</button>`)}
+        ${slot === 'international' && todo.length ? vrTrackerNote(' If yours is closed, hold this money and invest it when the fund reopens.') : ''}
         ${ls.length && !todo.length ? allDone(slot) : `<div class="tablewrap"><table class="t"><thead><tr><th>Fund</th><th class="r">Planned ₹</th><th class="r">Units bought</th><th class="r">NAV paid</th><th class="r">Amount</th><th></th></tr></thead>
         <tbody>${todo.map((l) => { const f = fundOf(l.assetId); return `<tr>
           <td class="nm">${esc(l.assetName)}<span class="a">${f ? esc(f.amc) : '<span class="warn">no longer in the fund list</span>'}${slot === 'gold' ? ' · buy on Kite' : ''}${f?.nav ? ` · latest NAV ${num(f.nav, 4)}, about ${num(l.amount / f.nav, 3)} units` : ''}</span></td>
